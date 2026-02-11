@@ -458,6 +458,10 @@ export const WorkoutConverter = {
         }
       }
 
+      if (step.type === 'Rest' && !intensityStr) {
+        intensityStr = prioritizeHr ? '50% LTHR' : '50%'
+      }
+
       // Cadence (optional)
       let cadenceStr = ''
       if (step.cadence && step.type !== 'Rest') {
@@ -488,11 +492,9 @@ export const WorkoutConverter = {
       if (distanceStr) line += ` ${distanceStr}`
       if (durationStr) line += ` ${durationStr}`
 
-      // Only add intensity and cadence for non-rest steps
-      if (step.type !== 'Rest') {
-        if (intensityStr) line += ` ${intensityStr}`
-        if (cadenceStr) line += ` ${cadenceStr}`
-      }
+      // Only add cadence for non-rest steps
+      if (intensityStr) line += ` ${intensityStr}`
+      if (step.type !== 'Rest' && cadenceStr) line += ` ${cadenceStr}`
 
       lines.push(line.trim().replace(/\s+/g, ' '))
     })

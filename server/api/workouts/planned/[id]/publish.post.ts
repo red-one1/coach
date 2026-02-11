@@ -51,11 +51,13 @@ export default defineEventHandler(async (event) => {
   }
 
   // Check if already published/synced
+  const isNonNumericExternalId = workout.externalId ? !/^\d+$/.test(workout.externalId) : true
   const isLocal =
     workout.syncStatus === 'LOCAL_ONLY' ||
     workout.externalId.startsWith('ai_gen_') ||
     workout.externalId.startsWith('ai-gen-') ||
-    workout.externalId.startsWith('adhoc-')
+    workout.externalId.startsWith('adhoc-') ||
+    isNonNumericExternalId
 
   // Fetch sport settings to check preferences
   const sportSettings = await sportSettingsRepository.getForActivityType(userId, intervalsType)
