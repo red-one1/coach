@@ -57,30 +57,43 @@
         <div v-else-if="nutrition" class="space-y-8">
           <!-- 0. THE DATE HEADER -->
           <UCard class="border-primary-100 dark:border-primary-900 shadow-sm">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-4">
-                <UButton
-                  icon="i-heroicons-chevron-left"
-                  color="neutral"
-                  variant="ghost"
-                  @click="navigateDate(-1)"
-                />
-                <div class="p-3 bg-primary-50 dark:bg-primary-950/20 rounded-xl">
-                  <UIcon name="i-heroicons-calendar-days" class="w-8 h-8 text-primary-500" />
+            <div class="flex items-center gap-2 sm:justify-between">
+              <UButton
+                icon="i-heroicons-chevron-left"
+                color="neutral"
+                variant="ghost"
+                class="shrink-0"
+                @click="navigateDate(-1)"
+              />
+
+              <div
+                class="min-w-0 flex flex-1 items-center justify-center gap-2 sm:justify-start sm:gap-4"
+              >
+                <div
+                  class="hidden sm:block p-2 sm:p-3 bg-primary-50 dark:bg-primary-950/20 rounded-lg sm:rounded-xl"
+                >
+                  <UIcon
+                    name="i-heroicons-calendar-days"
+                    class="w-5 h-5 sm:w-8 sm:h-8 text-primary-500"
+                  />
                 </div>
-                <div>
-                  <h1 class="text-2xl font-black tracking-tight text-gray-900 dark:text-white">
-                    {{ formatDateLabel(nutrition?.date || (route.params.id as string)) }}
+                <div class="min-w-0 text-center sm:text-left">
+                  <h1
+                    class="text-lg sm:text-2xl font-black tracking-tight text-gray-900 dark:text-white truncate"
+                  >
+                    {{ formatDatePrimary(nutrition?.date || (route.params.id as string)) }}
                   </h1>
-                  <p class="text-sm text-gray-500 font-bold uppercase tracking-widest">
-                    Daily Fueling Strategy
+                  <p class="text-sm text-gray-500 font-bold">
+                    {{ formatDateWeekday(nutrition?.date || (route.params.id as string)) }}
                   </p>
                 </div>
               </div>
+
               <UButton
                 icon="i-heroicons-chevron-right"
                 color="neutral"
                 variant="ghost"
+                class="shrink-0"
                 @click="navigateDate(1)"
               />
             </div>
@@ -136,9 +149,20 @@
               <NutritionLiveEnergyChart
                 :points="energyPoints"
                 :ghost-points="ghostPoints"
+                :journey-events="journeyEvents"
                 :view-mode="energyViewMode"
               />
             </ClientOnly>
+
+            <UAlert
+              v-if="missingPlannedStartTimeCount > 0"
+              class="mt-4"
+              color="warning"
+              variant="soft"
+              icon="i-heroicons-exclamation-triangle"
+              title="Planned activity missing start time"
+              :description="missingStartTimeWarning"
+            />
 
             <!-- Legend/Status -->
             <div
@@ -267,15 +291,18 @@
         </div>
 
         <NutritionFoodItemModal
-          ref="itemModal"
+          v-model:open="showItemModal"
           :nutrition-id="nutrition?.id"
           :date="nutrition?.date || (route.params.id as string)"
+          :mode="modalMode"
+          :initial-data="modalInitialData"
           @updated="fetchData"
         />
         <NutritionFoodAiModal
-          ref="aiModal"
+          v-model:open="showAiModal"
           :nutrition-id="nutrition?.id"
           :date="nutrition?.date || (route.params.id as string)"
+          :initial-context="aiModalContext"
           @updated="fetchData"
         />
       </div>
@@ -284,8 +311,10 @@
 </template>
 
 <script setup lang="ts">
-  import { mapNutritionToTimeline } from '~/utils/nutrition-timeline'
-  import { calculateGlycogenState, calculateEnergyTimeline } from '~/utils/nutrition-logic'
+  import {
+    mapNutritionToTimeline,
+    countPlannedWorkoutsWithMissingStartTime
+  } from '~/utils/nutrition-timeline'
   import { ABSORPTION_PROFILES, type AbsorptionType } from '~/utils/nutrition-absorption'
   import { addDays, format } from 'date-fns'
 
@@ -301,6 +330,7 @@
   // State
   const nutrition = ref<any>(null)
   const workouts = ref<any[]>([])
+  const journeyEvents = ref<any[]>([])
   const nutritionSettings = ref<any>(null)
   const loading = ref(true)
   const error = ref<string | null>(null)
@@ -308,8 +338,11 @@
   const quickLogInput = ref('')
   const isLogging = ref(false)
 
-  const itemModal = ref<any>(null)
-  const aiModal = ref<any>(null)
+  const showItemModal = ref(false)
+  const showAiModal = ref(false)
+  const modalMode = ref<'add' | 'edit'>('add')
+  const modalInitialData = ref<any>(null)
+  const aiModalContext = ref<any>(null)
 
   const energyViewIdx = ref('0') // '0': %, '1': kcal, '2': carbs
 
@@ -347,93 +380,68 @@
 
   const energyPoints = computed(() => {
     // Priority: Server-provided points (consistent with metabolic chain)
-    if (nutrition.value?.energyPoints && nutrition.value.energyPoints.length > 0) {
-      return nutrition.value.energyPoints
+    return nutrition.value?.energyPoints || []
+  })
+
+  const missingPlannedStartTimeCount = computed(() =>
+    countPlannedWorkoutsWithMissingStartTime(workouts.value)
+  )
+
+  // Metabolic Ghost Line - Fetched from server
+  const ghostPoints = ref<any[]>([])
+  const loadingGhost = ref(false)
+
+  async function fetchGhostPoints() {
+    const recommendationStore = useRecommendationStore()
+    const mealRec = recommendationStore.todayRecommendation?.analysisJson?.meal_recommendation
+    if (!mealRec || !nutrition.value) {
+      ghostPoints.value = []
+      return
     }
 
-    if (!nutrition.value || !nutritionSettings.value) return []
-
-    const { timezone } = useFormat()
-
-    return calculateEnergyTimeline(
-      nutrition.value,
-      workouts.value,
-      nutritionSettings.value,
-      timezone.value,
-      undefined,
-      {
-        startingGlycogenPercentage: nutrition.value.startingGlycogen,
-        startingFluidDeficit: nutrition.value.startingFluid
-      }
-    )
-  })
-
-  const ghostPoints = computed(() => {
-    // Recommendation-based ghost line logic
-
-    const recommendationStore = useRecommendationStore()
-
     const recDate = recommendationStore.todayRecommendation?.date
-
     const viewingDate = nutrition.value?.date
+    const viewingDateStr =
+      viewingDate instanceof Date ? viewingDate.toISOString().split('T')[0] : viewingDate
 
-    // Simple check if recommendation applies to viewing day
+    if (recDate && viewingDateStr && recDate.split('T')[0] !== viewingDateStr.split('T')[0]) {
+      ghostPoints.value = []
+      return
+    }
 
-    if (!recommendationStore.todayRecommendation?.analysisJson?.meal_recommendation) return []
+    loadingGhost.value = true
+    try {
+      const { points } = await $fetch<any>('/api/nutrition/simulate-impact', {
+        method: 'POST',
+        body: {
+          date: viewingDateStr,
+          carbs: mealRec.carbs,
+          absorptionType: mealRec.absorptionType
+        }
+      })
+      ghostPoints.value = points
+    } catch (e) {
+      console.error('Failed to fetch ghost points:', e)
+      ghostPoints.value = []
+    } finally {
+      loadingGhost.value = false
+    }
+  }
 
-    if (recDate && viewingDate && recDate.split('T')[0] !== viewingDate.split('T')[0]) return []
-
-    const mealRec = recommendationStore.todayRecommendation.analysisJson.meal_recommendation
-
-    const { timezone } = useFormat()
-
-    const now = new Date()
-
-    const ghostTime = new Date(now.getTime() + 15 * 60000)
-
-    return calculateEnergyTimeline(
-      nutrition.value,
-
-      workouts.value,
-
-      nutritionSettings.value,
-
-      timezone.value,
-
-      {
-        totalCarbs: mealRec.carbs || 30,
-
-        totalKcal: (mealRec.carbs || 30) * 4,
-
-        profile:
-          ABSORPTION_PROFILES[mealRec.absorptionType as AbsorptionType] ||
-          ABSORPTION_PROFILES.BALANCED,
-
-        time: ghostTime
-      },
-
-      {
-        startingGlycogenPercentage: nutrition.value.startingGlycogen,
-
-        startingFluidDeficit: nutrition.value.startingFluid
-      }
-    )
-  })
+  // Watch for recommendation or nutrition changes to refresh ghost line
+  const recommendationStore = useRecommendationStore()
+  watch(
+    [() => recommendationStore.todayRecommendation, nutrition],
+    () => {
+      fetchGhostPoints()
+    },
+    { immediate: true }
+  )
 
   const timeline = computed(() => {
     if (!nutrition.value || !nutritionSettings.value) return []
 
     try {
-      console.log('[NutritionDashboard] Computing timeline with:', {
-        nutritionDate: nutrition.value.date,
-
-        workoutCount: workouts.value.length,
-
-        hasFuelingPlan: !!nutrition.value.fuelingPlan,
-
-        timezone: (useFormat() as any).timezone.value
-      })
-
       const result = mapNutritionToTimeline(
         nutrition.value,
 
@@ -456,16 +464,16 @@
         }
       )
 
-      console.log(
-        '[NutritionDashboard] Timeline generated:',
-        result.map((w) => ({ type: w.type, start: w.startTime, items: w.items.length }))
-      )
-
       return result
     } catch (error) {
-      console.error('[NutritionDashboard] Timeline computation failed:', error)
       return []
     }
+  })
+
+  const missingStartTimeWarning = computed(() => {
+    const count = missingPlannedStartTimeCount.value
+    if (!count) return ''
+    return `${count} planned ${count === 1 ? 'activity is' : 'activities are'} missing a start time. They can appear at 00:00 and skew this energy projection.`
   })
 
   // Data Fetching
@@ -479,17 +487,16 @@
 
     try {
       // 1. Fetch Nutrition record
-      console.log('[NutritionDashboard] Fetching nutrition for:', id)
       const nData = await $fetch<any>(`/api/nutrition/${id}`, {
         query: { currentTime: new Date().toISOString() }
       })
 
       nutrition.value = nData
+      journeyEvents.value = nData.journeyEvents || []
 
       const dateStr = nData.date
 
       // 2. Fetch all training activities for this date
-      console.log('[NutritionDashboard] Fetching activities for date:', dateStr)
       const wData = await $fetch<any[]>('/api/calendar', {
         query: { startDate: dateStr, endDate: dateStr }
       })
@@ -502,17 +509,11 @@
           a.type !== 'Note'
       )
 
-      console.log(`[NutritionDashboard] Received ${workouts.value.length} training activities`)
-
       // 3. Fetch Nutrition Settings
-
-      console.log('[NutritionDashboard] Fetching nutrition settings...')
 
       const sData = await $fetch<any>('/api/profile/nutrition')
 
       nutritionSettings.value = sData.settings
-
-      console.log('[NutritionDashboard] Data fetching complete')
     } catch (error: any) {
       console.error('Fetch Error:', error)
 
@@ -596,7 +597,9 @@
       mealType = 'lunch'
     }
 
-    itemModal.value?.open('add', { mealType })
+    modalMode.value = 'add'
+    modalInitialData.value = { mealType }
+    showItemModal.value = true
   }
 
   function handleAddItemAi(event: { type: string; meals?: string[] }) {
@@ -611,15 +614,20 @@
     } else if (event.type === 'POST_WORKOUT') {
       mealType = 'lunch'
     }
-    aiModal.value?.open(mealType)
+
+    aiModalContext.value = { mealType }
+    showAiModal.value = true
   }
 
   function handleEditItem(item: any) {
-    itemModal.value?.open('edit', item)
+    modalMode.value = 'edit'
+    modalInitialData.value = item
+    showItemModal.value = true
   }
 
   function openAiModal(mealType: string = 'snacks') {
-    aiModal.value?.open(mealType)
+    aiModalContext.value = { mealType }
+    showAiModal.value = true
   }
 
   function formatDateLabel(date: string) {
@@ -630,6 +638,23 @@
       month: 'long',
       day: 'numeric',
       year: 'numeric'
+    })
+  }
+
+  function formatDatePrimary(date: string) {
+    if (!date) return ''
+    const d = new Date(date + 'T12:00:00') // Force noon to avoid TZ shift in label
+    return `${d.toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric'
+    })},`
+  }
+
+  function formatDateWeekday(date: string) {
+    if (!date) return ''
+    const d = new Date(date + 'T12:00:00') // Force noon to avoid TZ shift in label
+    return d.toLocaleDateString('en-US', {
+      weekday: 'long'
     })
   }
 

@@ -1,93 +1,15 @@
-import { extractWorkoutTemperatureC, getEstimatedSweatRateLph } from './sweat-rate'
+import { extractWorkoutTemperatureC, getEstimatedSweatRateLph } from '../nutrition/sweat-rate'
+import type {
+  FuelingProfile,
+  WorkoutContext,
+  SerializedFuelingPlan,
+  SerializedFuelingWindow,
+  CalorieBreakdown
+} from './types'
 
-export interface FuelingProfile {
-  weight: number // kg
-  ftp: number // watts
-  currentCarbMax: number // g/hr
-  sodiumTarget?: number // mg/L
-  sweatRate?: number // L/hr
-  preWorkoutWindow?: number // min (default 90)
-  postWorkoutWindow?: number // min (default 60)
-  fuelingSensitivity?: number
-  fuelState1Trigger?: number
-  fuelState1Min?: number
-  fuelState1Max?: number
-  fuelState2Trigger?: number
-  fuelState2Min?: number
-  fuelState2Max?: number
-  fuelState3Min?: number
-  fuelState3Max?: number
-  bmr?: number
-  activityLevel?: string
-  targetAdjustmentPercent?: number
-  goalProfile?: string
-}
-
-export interface CalorieBreakdown {
-  baseCalories: number
-  activityCalories: number
-  adjustmentCalories: number
-  totalTarget: number
-  workouts: {
-    title: string
-    calories: number
-    intensity: number
-    durationHours: number
-  }[]
-}
-
-export interface WorkoutContext {
-  id: string
-  title: string
-  durationSec: number // seconds
-  tss?: number | null
-  intensityFactor?: number | null
-  workIntensity?: number | null // 0-1
-  type?: string | null
-  startTime?: Date | null
-  strategyOverride?: string // e.g. 'TRAIN_LOW', 'HIGH_CARB'
-  date: Date
-  avgTemp?: number | null
-  rawJson?: any
-}
-
-export interface SerializedFuelingWindow {
-  type: 'PRE_WORKOUT' | 'INTRA_WORKOUT' | 'POST_WORKOUT' | 'general_day'
-  startTime: string // ISO string
-  endTime: string // ISO string
-  targetCarbs: number // grams
-  targetProtein: number // grams
-  targetFat: number // grams
-  targetFluid: number // ml
-  targetSodium: number // mg
-  description: string
-  status: 'PENDING' | 'HIT' | 'MISSED' | 'PARTIAL'
-  supplements?: string[]
-  plannedWorkoutId?: string
-  workoutTitle?: string
-}
-
-export interface SerializedFuelingPlan {
-  windows: SerializedFuelingWindow[]
-  dailyTotals: {
-    calories: number
-    carbs: number
-    protein: number
-    fat: number
-    fluid: number
-    sodium: number
-    baseCalories: number
-    activityCalories: number
-    adjustmentCalories: number
-    fuelState: number
-    workoutCalories?: {
-      title: string
-      calories: number
-    }[]
-  }
-  notes: string[]
-}
-
+/**
+ * Calculates a fueling strategy for a specific workout context and user profile.
+ */
 export function calculateFuelingStrategy(
   profile: FuelingProfile,
   workout: WorkoutContext
@@ -116,7 +38,6 @@ export function calculateFuelingStrategy(
   let dailyCarbTargetGrams = profile.weight * ((carbRange.min + carbRange.max) / 2) * sensitivity
 
   // Apply Goal Adjustment to Carbs as well (e.g. -20% for LOSE)
-  // This ensures the Carb Goal doesn't fight the Calorie Goal
   const adjustmentMultiplier = 1 + (profile.targetAdjustmentPercent || 0) / 100
   dailyCarbTargetGrams *= adjustmentMultiplier
 
@@ -161,11 +82,15 @@ export function calculateFuelingStrategy(
   if (workout.strategyOverride === 'TRAIN_LOW') {
     targetCarbsPerHour = 0
     notes.push('TRAIN LOW Protocol: No carb intake during ride to enhance fat oxidation.')
+  } else if (workout.strategyOverride === 'LOW_FIBER_LIQUID') {
+    targetCarbsPerHour = Math.min(45, targetCarbsPerHour)
+    notes.push(
+      'RESCUE PROTOCOL: Capping intra-workout carbs at 45g/hr and prioritizing liquid/gel forms.'
+    )
   } else {
-    // "Fuel for the Work Required" - Intra is still based on g/hr logic, but influenced by state
     if (durationHours < 1) {
       targetCarbsPerHour = 0
-      if (intensity > 0.9) targetCarbsPerHour = 45 // High intensity short
+      if (intensity > 0.9) targetCarbsPerHour = 45
     } else if (durationHours < 2) {
       targetCarbsPerHour = intensity > 0.8 ? 75 : 45
     } else {
@@ -175,7 +100,6 @@ export function calculateFuelingStrategy(
     targetCarbsPerHour *= sensitivity
   }
 
-  // Apply Gut Training Cap & Global Physiological Limit (90g/hr)
   const GLOBAL_CAP = 90
   const userCap = profile.currentCarbMax || GLOBAL_CAP
   const effectiveCap = Math.min(GLOBAL_CAP, userCap)
@@ -187,19 +111,10 @@ export function calculateFuelingStrategy(
     targetCarbsPerHour = effectiveCap
   }
 
-  if (!profile.sweatRate) {
-    const tempLabel = workoutTempC == null ? 'default temp' : `${Math.round(workoutTempC)}C`
-    notes.push(
-      `Estimated sweat rate ${effectiveSweatRate.toFixed(2)}L/hr from intensity ${Math.round(intensity * 100)}% and ${tempLabel}.`
-    )
-  }
-
-  // Apply Goal Adjustment to Intra-Workout as well
   const intraCarbs = Math.round(targetCarbsPerHour * durationHours * adjustmentMultiplier)
   const intraFluid = Math.round(hydrationPerHour * durationHours)
   const intraSodium = Math.round(sodiumPerHour * durationHours)
 
-  // Workout Start Time (default to 10am if not set)
   const workoutStart = workout.startTime
     ? new Date(workout.startTime)
     : new Date(workout.date.getTime() + 10 * 60 * 60 * 1000)
@@ -226,9 +141,19 @@ export function calculateFuelingStrategy(
   const preStart = new Date(workoutStart.getTime() - preDuration * 60000)
 
   let preCarbs = profile.weight * 1.0 * sensitivity * adjustmentMultiplier
+  let preProtein = 20
+  let preFat = 10
+  let preDescription = 'Pre-workout fueling window.'
+
   if (workout.strategyOverride === 'TRAIN_LOW') {
-    preCarbs = 10 // Minimal carbs
+    preCarbs = 10
     notes.push('TRAIN LOW: Minimal pre-workout carbs (<10g) to maintain low glycogen state.')
+  } else if (workout.strategyOverride === 'LOW_FIBER_LIQUID') {
+    preCarbs = profile.weight * 0.8
+    preProtein = 15
+    preFat = 2
+    preDescription = 'RESCUE PROTOCOL: Low-fiber, liquid-based pre-workout fueling.'
+    notes.push('RESCUE PROTOCOL: Reducing pre-workout fiber and fat to minimize digestive load.')
   } else if (state === 3 || durationHours > 3) {
     preCarbs = profile.weight * 2.0 * sensitivity * adjustmentMultiplier
   }
@@ -238,11 +163,11 @@ export function calculateFuelingStrategy(
     startTime: preStart.toISOString(),
     endTime: workoutStart.toISOString(),
     targetCarbs: Math.round(preCarbs),
-    targetProtein: 20,
-    targetFat: 10,
+    targetProtein: preProtein,
+    targetFat: preFat,
     targetFluid: 500,
     targetSodium: 500,
-    description: 'Pre-workout fueling window.',
+    description: preDescription,
     status: 'PENDING',
     plannedWorkoutId: workout.id,
     workoutTitle: workout.title
@@ -252,12 +177,20 @@ export function calculateFuelingStrategy(
   const postDuration = profile.postWorkoutWindow || 60
   const postEnd = new Date(workoutEnd.getTime() + postDuration * 60000)
 
-  const postCarbs = profile.weight * 1.2 * sensitivity * adjustmentMultiplier
+  let postCarbs = profile.weight * 1.2 * sensitivity * adjustmentMultiplier
   let postProtein = 30
+  let postFat = 15
+  let postDescription = 'Post-workout recovery window.'
 
   if (workout.strategyOverride === 'TRAIN_LOW') {
-    postProtein = 45 // Bumping protein for Train Low recovery
+    postProtein = 45
     notes.push('TRAIN LOW: Increased post-workout protein to support muscle repair.')
+  } else if (workout.strategyOverride === 'LOW_FIBER_LIQUID') {
+    postCarbs = profile.weight * 1.0
+    postProtein = 40
+    postFat = 5
+    postDescription = 'RESCUE PROTOCOL: Rapid-absorption recovery fueling.'
+    notes.push('RESCUE PROTOCOL: Focusing on rapid protein and carb absorption with minimal fat.')
   }
 
   windows.push({
@@ -266,10 +199,10 @@ export function calculateFuelingStrategy(
     endTime: postEnd.toISOString(),
     targetCarbs: Math.round(postCarbs),
     targetProtein: postProtein,
-    targetFat: 15,
-    targetFluid: 750, // Rehydration
+    targetFat: postFat,
+    targetFluid: 750,
     targetSodium: 0,
-    description: 'Post-workout recovery window.',
+    description: postDescription,
     status: 'PENDING',
     plannedWorkoutId: workout.id,
     workoutTitle: workout.title
@@ -319,7 +252,6 @@ export function calculateDailyCalorieBreakdown(
   const workoutDetails: CalorieBreakdown['workouts'] = []
 
   for (const w of workouts) {
-    // Only add activity calories if it's not a rest day and has duration
     if (w.type !== 'Rest' && w.durationHours > 0) {
       const avgPower = profile.ftp * (w.intensity || 0.5)
       const workoutkJ = avgPower * w.durationHours * 3.6

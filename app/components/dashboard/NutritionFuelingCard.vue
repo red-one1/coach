@@ -132,6 +132,13 @@
             <div class="flex justify-between text-xs font-bold uppercase tracking-wider">
               <span class="text-gray-500 flex items-center gap-1">
                 Glycogen "Fuel Tank"
+                <UTooltip
+                  v-if="isChainCalibrating"
+                  :text="chainCalibrationTooltip"
+                  :popper="{ placement: 'top' }"
+                >
+                  <UBadge color="warning" variant="soft" size="xs">Calibrating</UBadge>
+                </UTooltip>
                 <UIcon
                   name="i-heroicons-information-circle"
                   class="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -159,6 +166,9 @@
                 class="text-[9px] font-black uppercase text-primary-500 opacity-0 group-hover:opacity-100 transition-opacity"
                 >Show Breakdown</span
               >
+            </p>
+            <p v-if="isChainCalibrating" class="text-[10px] text-amber-600 dark:text-amber-400">
+              Fuel chain is still calibrating ({{ chainAnchoredDays }}/7 linked days).
             </p>
           </div>
 
@@ -190,7 +200,6 @@
                   ]"
                   size="xs"
                   class="w-32"
-                  @update:model-value="console.log('[FuelingCard] View switched to:', $event)"
                 />
               </div>
               <NutritionLiveEnergyChart
@@ -401,6 +410,8 @@
     :state="glycogenState.state"
     :advice="tankAdvice"
     :breakdown="glycogenState.breakdown"
+    :coach-tip="modalCoachTip"
+    :projection-note="modalProjectionNote"
   />
 
   <NutritionMacroExplainModal
@@ -422,22 +433,24 @@
   />
 
   <NutritionFoodItemModal
-    ref="itemModal"
+    v-model:open="showItemModal"
     :nutrition-id="nutrition?.id"
     :date="nutrition?.date || formatDateUTC(new Date(), 'yyyy-MM-dd')"
+    :mode="modalMode"
+    :initial-data="modalInitialData"
     @updated="emit('refresh')"
   />
   <NutritionFoodAiModal
-    ref="aiModal"
+    v-model:open="showAiModal"
     :nutrition-id="nutrition?.id"
     :date="nutrition?.date || formatDateUTC(new Date(), 'yyyy-MM-dd')"
+    :initial-context="aiModalContext"
     @updated="emit('refresh')"
   />
 </template>
 
 <script setup lang="ts">
   import { mapNutritionToTimeline } from '~/utils/nutrition-timeline'
-  import { calculateGlycogenState, calculateEnergyTimeline } from '~/utils/nutrition-logic'
   import { ABSORPTION_PROFILES, type AbsorptionType } from '~/utils/nutrition-absorption'
 
   const props = defineProps<{
@@ -463,8 +476,11 @@
   const isHydrationExplainOpen = ref(false)
   const selectedMacro = ref<any>(null)
 
-  const itemModal = ref<any>(null)
-  const aiModal = ref<any>(null)
+  const showItemModal = ref(false)
+  const showAiModal = ref(false)
+  const modalMode = ref<'add' | 'edit'>('add')
+  const modalInitialData = ref<any>(null)
+  const aiModalContext = ref<any>(null)
 
   const energyViewIdx = ref('0') // '0': %, '1': kcal, '2': carbs
   const energyViewMode = computed(() => {
@@ -485,7 +501,10 @@
     } else if (event.type === 'POST_WORKOUT') {
       mealType = 'lunch'
     }
-    itemModal.value?.open('add', { mealType })
+
+    modalMode.value = 'add'
+    modalInitialData.value = { mealType }
+    showItemModal.value = true
   }
 
   function handleAddItemAi(event: { type: string; meals?: string[] }) {
@@ -500,11 +519,15 @@
     } else if (event.type === 'POST_WORKOUT') {
       mealType = 'lunch'
     }
-    aiModal.value?.open(mealType)
+
+    aiModalContext.value = { mealType }
+    showAiModal.value = true
   }
 
   function handleEditItem(item: any) {
-    itemModal.value?.open('edit', item)
+    modalMode.value = 'edit'
+    modalInitialData.value = item
+    showItemModal.value = true
   }
 
   function showMacroExplain(label: string) {
@@ -565,70 +588,47 @@
 
   const energyPoints = computed(() => {
     // Priority: Server-provided points (consistent with metabolic chain)
-    if (props.nutrition?.energyPoints && props.nutrition.energyPoints.length > 0) {
-      return props.nutrition.energyPoints
+    return props.nutrition?.energyPoints || []
+  })
+
+  // Metabolic Ghost Line - Fetched from server
+  const ghostPoints = ref<any[]>([])
+  const loadingGhost = ref(false)
+
+  async function fetchGhostPoints() {
+    const mealRec = mealRecommendation.value
+    if (!mealRec || !props.nutrition) {
+      ghostPoints.value = []
+      return
     }
 
-    if (!props.nutrition || !props.settings) return []
+    loadingGhost.value = true
+    try {
+      const { points } = await $fetch<any>('/api/nutrition/simulate-impact', {
+        method: 'POST',
+        body: {
+          date: props.nutrition.date,
+          carbs: mealRec.carbs,
+          absorptionType: mealRec.absorptionType
+        }
+      })
+      ghostPoints.value = points
+    } catch (e) {
+      console.error('Failed to fetch ghost points:', e)
+      ghostPoints.value = []
+    } finally {
+      loadingGhost.value = false
+    }
+  }
 
-    const { timezone } = useFormat()
-
-    return calculateEnergyTimeline(
-      props.nutrition,
-      props.workouts || [],
-      props.settings,
-      timezone.value,
-      undefined,
-      {
-        startingGlycogenPercentage: props.nutrition.startingGlycogen,
-        startingFluidDeficit: props.nutrition.startingFluid
-      }
-    )
-  })
-
-  // Metabolic Ghost Line Calculation
-
-  const ghostPoints = computed(() => {
-    const mealRec = mealRecommendation.value
-
-    if (!mealRec || !props.nutrition || !props.settings) return []
-
-    const { timezone } = useFormat()
-
-    const now = new Date()
-
-    // Simulate adding the recommended meal 15 mins from now
-
-    const ghostTime = new Date(now.getTime() + 15 * 60000)
-
-    return calculateEnergyTimeline(
-      props.nutrition,
-
-      props.workouts || [],
-
-      props.settings,
-
-      timezone.value,
-
-      {
-        totalCarbs: mealRec.carbs || 30,
-
-        totalKcal: (mealRec.carbs || 30) * 4,
-
-        profile:
-          ABSORPTION_PROFILES[mealRec.absorptionType as AbsorptionType] ||
-          ABSORPTION_PROFILES.BALANCED,
-
-        time: ghostTime
-      },
-
-      {
-        startingGlycogenPercentage: props.nutrition.startingGlycogen,
-
-        startingFluidDeficit: props.nutrition.startingFluid
-      }
-    )
-  })
+  // Watch for recommendation changes to refresh ghost line
+  watch(
+    mealRecommendation,
+    () => {
+      fetchGhostPoints()
+    },
+    { immediate: true }
+  )
 
   const currentLevel = computed(() => {
     const points = energyPoints.value
@@ -668,31 +668,64 @@
       }
     }
 
-    if (!props.nutrition) {
-      return {
-        percentage: 85,
-        advice: 'Loading...',
-        state: 1,
-        breakdown: {
-          midnightBaseline: 80,
-          replenishment: { value: 5, actualCarbs: 0, targetCarbs: 300 },
-          depletion: []
-        }
+    return {
+      percentage: 85,
+      advice: 'Loading...',
+      state: 1,
+      breakdown: {
+        midnightBaseline: 80,
+        replenishment: { value: 5, actualCarbs: 0, targetCarbs: 300 },
+        depletion: []
       }
     }
-    const { timezone } = useFormat()
-    return calculateGlycogenState(
-      props.nutrition,
-      props.workouts || [],
-      props.settings,
-      timezone.value,
-      new Date(),
-      props.nutrition.startingGlycogen
-    )
   })
 
   const tankPercentage = computed(() => glycogenState.value.percentage)
   const tankAdvice = computed(() => glycogenState.value.advice)
+  const chainAnchoredDays = computed(() => props.nutrition?.chainCalibration?.anchoredDays || 0)
+  const isChainCalibrating = computed(() => !!props.nutrition?.chainCalibration?.isCalibrating)
+  const chainCalibrationTooltip = computed(() => {
+    const anchored = chainAnchoredDays.value
+    const confidence = props.nutrition?.chainCalibration?.confidence || 'CALIBRATING'
+    return `This tank is based on chain reconstruction (${anchored}/7 linked days from recent logs/chain state, ${confidence.toLowerCase()} confidence). It stabilizes as more consecutive days are linked.`
+  })
+
+  const nextPlannedWindow = computed(() => {
+    const windows = Array.isArray(props.nutrition?.fuelingPlan?.windows)
+      ? props.nutrition.fuelingPlan.windows
+      : []
+    const now = Date.now()
+    return windows
+      .filter((w: any) => {
+        const endTs = new Date(w.endTime).getTime()
+        return Number.isFinite(endTs) && endTs > now && (w.targetCarbs || 0) > 0
+      })
+      .sort(
+        (a: any, b: any) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+      )[0]
+  })
+
+  const modalCoachTip = computed(() => {
+    const tank = tankPercentage.value
+    const nextWindow = nextPlannedWindow.value
+    if (tank < 35 && nextWindow) {
+      const startTs = new Date(nextWindow.startTime).getTime()
+      const minsToStart = Math.round((startTs - Date.now()) / 60000)
+      const windowLabel = String(nextWindow.type || 'fueling')
+        .replaceAll('_', ' ')
+        .toLowerCase()
+      const targetCarbs = Math.round(nextWindow.targetCarbs || 0)
+      const immediateCarbs = Math.max(20, Math.min(45, Math.round(targetCarbs * 0.4)))
+      const timingText = minsToStart <= 0 ? 'is active now' : `starts in ~${minsToStart} min`
+      return `Fuel is low. Your next ${windowLabel} window ${timingText} (target ${targetCarbs}g carbs). Take ~${immediateCarbs}g fast carbs now, then complete the remaining target in that window.`
+    }
+    return undefined
+  })
+
+  const modalProjectionNote = computed(() => {
+    if (!nextPlannedWindow.value) return undefined
+    return 'Planned/synthetic windows are projections. They affect the future line, but become real replenishment as time passes and intake is logged.'
+  })
 
   const mealRecommendationReasoning = computed(() => {
     const raw = mealRecommendation.value?.reasoning || ''

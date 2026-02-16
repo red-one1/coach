@@ -8,6 +8,7 @@ import { mathTools } from './ai-tools/math'
 import { metricTools } from './ai-tools/metric-tools'
 import { nutritionTools } from './ai-tools/nutrition'
 import { wellnessTools } from './ai-tools/wellness'
+import { journeyTools } from './ai-tools/journey'
 import { availabilityTools } from './ai-tools/availability'
 import { timeTools } from './ai-tools/time'
 import type { AiSettings } from './ai-user-settings'
@@ -20,17 +21,18 @@ export const getToolsWithContext = (
   chatRoomId?: string
 ) => {
   return {
-    ...workoutTools(userId, timezone),
-    ...planningTools(userId, timezone),
+    ...workoutTools(userId, timezone, settings),
+    ...planningTools(userId, timezone, settings),
     ...recommendationTools(userId, timezone),
     ...analysisTools(userId, timezone, settings),
-    ...profileTools(userId, timezone),
+    ...profileTools(userId, timezone, settings),
     ...supportTools(userId, chatRoomId),
     ...mathTools(),
     ...metricTools(userId, timezone),
-    ...nutritionTools(userId, timezone),
+    ...nutritionTools(userId, timezone, settings),
     ...wellnessTools(userId, timezone),
-    ...availabilityTools(userId),
+    ...journeyTools(userId, timezone),
+    ...availabilityTools(userId, settings),
     ...timeTools(userId, timezone)
   }
 }

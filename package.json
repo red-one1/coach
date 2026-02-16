@@ -9,6 +9,7 @@
     "@next-auth/prisma-adapter": "^1.0.7",
     "@nuxt/ui": "^4.3.0",
     "@nuxtjs/mdc": "^0.19.2",
+    "@openfoodfacts/openfoodfacts-nodejs": "2.0.0-alpha.29",
     "@pinia/nuxt": "^0.11.3",
     "@prisma/adapter-pg": "^7.2.0",
     "@prisma/client": "^7.2.0",
@@ -45,6 +46,7 @@
     "jimp": "0.22.12",
     "leaflet": "^1.9.4",
     "marked": "^17.0.1",
+    "motion-v": "^1.7.4",
     "next-auth": "4.21.1",
     "nuxt": "^4.2.2",
     "nuxt-api-shield": "^0.10.0",
@@ -136,7 +138,7 @@
     "prepare": "husky || true"
   },
   "type": "module",
-  "version": "0.5.18",
+  "version": "0.5.19",
   "pnpm": {
     "overrides": {
       "@vercel/nft": "^0.27.4"

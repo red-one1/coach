@@ -9,14 +9,17 @@ interface WorkoutStep {
   power?: {
     value?: number
     range?: { start: number; end: number }
+    units?: string
   }
   heartRate?: {
     value?: number
     range?: { start: number; end: number }
+    units?: string
   }
   pace?: {
     value?: number
     range?: { start: number; end: number }
+    units?: string
   }
   cadence?: number
   name?: string
@@ -309,9 +312,14 @@ export const WorkoutConverter = {
 
   toIntervalsICU(workout: WorkoutData): string {
     const lines: string[] = []
+    const normalizeUnits = (units: unknown): string | undefined => {
+      if (typeof units !== 'string') return undefined
+      const v = units.trim().toLowerCase()
+      return v || undefined
+    }
     const normalizeTarget = (
       target: any
-    ): { value?: number; range?: { start: number; end: number } } | null => {
+    ): { value?: number; range?: { start: number; end: number }; units?: string } | null => {
       if (target === null || target === undefined) return null
 
       if (Array.isArray(target)) {
@@ -334,7 +342,8 @@ export const WorkoutConverter = {
             range: {
               start: Number(target.range.start) || 0,
               end: Number(target.range.end) || 0
-            }
+            },
+            units: normalizeUnits(target.units ?? target.range.units)
           }
         }
         if (target.start !== undefined && target.end !== undefined) {
@@ -342,62 +351,119 @@ export const WorkoutConverter = {
             range: {
               start: Number(target.start) || 0,
               end: Number(target.end) || 0
-            }
+            },
+            units: normalizeUnits(target.units)
           }
         }
         if (target.value !== undefined) {
-          return { value: Number(target.value) || 0 }
+          return { value: Number(target.value) || 0, units: normalizeUnits(target.units) }
         }
       }
 
       return null
     }
+    const toDurationToken = (seconds: number) => {
+      if (seconds <= 0) return ''
+      if (seconds % 3600 === 0) return `${seconds / 3600}h`
+      if (seconds >= 3600 && seconds % 60 === 0) {
+        const hours = Math.floor(seconds / 3600)
+        const minutes = (seconds % 3600) / 60
+        return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`
+      }
+      if (seconds % 60 === 0) return `${seconds / 60}m`
+      return `${seconds}s`
+    }
+    const toDistanceToken = (meters?: number) => {
+      if (!meters || meters <= 0) return ''
+      if (meters % 1000 === 0) return `${meters / 1000}km`
+      return `${meters}m`
+    }
+    const toValuePct = (value: number) => {
+      if (!Number.isFinite(value)) return 0
+      return value <= 3 ? Math.round(value * 100) : Math.round(value)
+    }
+    const toRangePct = (start: number, end: number) => ({
+      start: toValuePct(start),
+      end: toValuePct(end)
+    })
+    const formatMetric = (
+      target: { value?: number; range?: { start: number; end: number }; units?: string } | null,
+      kind: 'power' | 'hr' | 'pace'
+    ) => {
+      if (!target) return ''
+      const units = target.units?.toLowerCase()
+      const hrLabel = units === 'hr' || units === 'maxhr' ? 'HR' : 'LTHR'
+
+      const formatValue = (value: number) => {
+        if (!Number.isFinite(value)) return ''
+        if (kind === 'power') {
+          if (units === 'w' || units === 'watts') return `${Math.round(value)}w`
+          if (units?.startsWith('z')) return units.toUpperCase()
+          return `${toValuePct(value)}%`
+        }
+        if (kind === 'hr') {
+          if (units === 'bpm') return `${Math.round(value)}bpm`
+          return `${toValuePct(value)}% ${hrLabel}`
+        }
+        if (units && units.includes('/')) return `${value}${units}`
+        return `${toValuePct(value)}% Pace`
+      }
+
+      const formatRange = (start: number, end: number) => {
+        if (kind === 'power') {
+          if (units === 'w' || units === 'watts') return `${Math.round(start)}-${Math.round(end)}w`
+          if (units?.startsWith('z')) return units.toUpperCase()
+          const pct = toRangePct(start, end)
+          return `ramp ${pct.start}-${pct.end}%`
+        }
+        if (kind === 'hr') {
+          if (units === 'bpm') return `${Math.round(start)}-${Math.round(end)}bpm`
+          const pct = toRangePct(start, end)
+          return `${pct.start}-${pct.end}% ${hrLabel}`
+        }
+        if (units && units.includes('/')) return `${start}-${end}${units}`
+        const pct = toRangePct(start, end)
+        return `${pct.start}-${pct.end}% Pace`
+      }
+
+      if (target.range) return formatRange(target.range.start ?? 0, target.range.end ?? 0)
+      if (typeof target.value === 'number' && target.value > 0.01) return formatValue(target.value)
+      return ''
+    }
 
     // Handle Strength Exercises
     if (workout.exercises && workout.exercises.length > 0) {
-      // Add description as a preamble if available
       if (workout.description) {
         lines.push(workout.description.trim())
-        lines.push('') // Add empty line to separate description from steps
+        lines.push('')
       }
 
       workout.exercises.forEach((ex) => {
-        // Line 1: Name (Bold)
         lines.push(`- **${ex.name}**`)
-
-        // Line 2: Details (Sets x Reps @ Weight)
         let details = ''
         if (ex.sets) details += `${ex.sets} sets`
         if (ex.reps) details += ` x ${ex.reps} reps`
         if (ex.weight) details += ` @ ${ex.weight}`
         if (details) lines.push(`  - ${details}`)
-
-        // Line 3: Rest
-        if (ex.rest) {
-          lines.push(`  - Rest: ${ex.rest}`)
-        }
-
-        // Line 4: Note
-        if (ex.notes) {
-          lines.push(`  - Note: ${ex.notes}`)
-        }
-
-        // Spacer
+        if (ex.rest) lines.push(`  - Rest: ${ex.rest}`)
+        if (ex.notes) lines.push(`  - Note: ${ex.notes}`)
         lines.push('')
       })
 
       return lines.join('\n').trim()
     }
 
-    // Determine preference (e.g. 'hr_power_pace' -> prioritize HR)
-    const loadPref = workout.sportSettings?.loadPreference?.toLowerCase() || ''
-    const prioritizeHr = loadPref.startsWith('hr')
-    const isSwim = workout.type?.toLowerCase().includes('swim')
+    const sportType = workout.type?.toLowerCase() || ''
+    const isSwim = sportType.includes('swim')
+    const isRun = !isSwim && sportType.includes('run')
+    const loadPref =
+      workout.sportSettings?.loadPreference?.toLowerCase() ||
+      (isRun ? 'hr_pace_power' : isSwim ? 'hr_pace_power' : 'power_hr_pace')
     const rawHrTolerancePct = Number(workout.sportSettings?.intervalsHrRangeTolerancePct || 0)
     const hrTolerancePct =
       rawHrTolerancePct > 1 ? rawHrTolerancePct / 100 : Math.max(0, rawHrTolerancePct)
     const normalizeHrTargetForExport = (
-      target: { value?: number; range?: { start: number; end: number } } | null
+      target: { value?: number; range?: { start: number; end: number }; units?: string } | null
     ) => {
       if (!target) return null
       if (target.range) return target
@@ -406,12 +472,9 @@ export const WorkoutConverter = {
 
       const start = Math.max(0, target.value - hrTolerancePct)
       const end = target.value + hrTolerancePct
-      return { range: { start, end } }
+      return { range: { start, end }, units: target.units }
     }
 
-    // Add description as a preamble if available
-    // We filter out lines starting with "-" to avoid Intervals.icu misinterpreting
-    // summary bullet points as actual workout steps.
     if (workout.description) {
       const cleanPreamble = workout.description
         .split('\n')
@@ -426,178 +489,139 @@ export const WorkoutConverter = {
     }
 
     let currentType = ''
+    const preamble = workout.description?.toLowerCase() || ''
 
-    const formatSteps = (steps: WorkoutStep[], indent = '') => {
+    const formatSteps = (
+      steps: WorkoutStep[],
+      indent = '',
+      parentStep: WorkoutStep | null = null
+    ) => {
       steps.forEach((step, index) => {
-        // Handle nested loops
-        if (step.steps && step.steps.length > 0) {
-          const reps = step.reps || 1
-          if (reps > 1) {
-            lines.push(`${indent}${reps}x`)
-            formatSteps(step.steps, indent + ' ')
-          } else {
-            // Just process steps if only 1 rep
-            formatSteps(step.steps, indent)
-          }
-          return
-        }
-
-        // Safely access power
-        const power = normalizeTarget(step.power) || { value: 0 }
-        const heartRate = normalizeHrTargetForExport(normalizeTarget(step.heartRate))
-        const pace = normalizeTarget(step.pace)
-
-        // Add header if type changes (only at root level)
         if (indent === '') {
+          let header = ''
           if (index === 0 && step.type === 'Warmup') {
-            lines.push('Warmup')
+            header = 'Warmup'
           } else if (step.type === 'Cooldown' && currentType !== 'Cooldown') {
-            lines.push('\nCooldown')
+            header = '\nCooldown'
           } else if (step.type === 'Active' && currentType === 'Warmup') {
-            lines.push('\nMain Set')
+            header = '\nMain Set'
+          }
+
+          if (header) {
+            const cleanHeader = header.trim().toLowerCase()
+            const lastLineRaw = lines.length > 0 ? lines[lines.length - 1] : ''
+            const lastLine = lastLineRaw ? lastLineRaw.trim().toLowerCase() : ''
+            const isRedundant =
+              preamble.startsWith(cleanHeader) ||
+              preamble.includes(`\n${cleanHeader}`) ||
+              lastLine === cleanHeader
+            if (!isRedundant) lines.push(header)
           }
           currentType = step.type
         }
 
-        // Format distance
-        let distanceStr = ''
-        if (step.distance) {
-          // Use 'mtr' for swimming to avoid 'm' being interpreted as minutes by Intervals.icu
-          distanceStr = isSwim ? `${step.distance}mtr` : `${step.distance}m`
+        if (step.steps && step.steps.length > 0) {
+          const reps = step.reps || 1
+          if (reps > 1) {
+            const lastLine = lines.length > 0 ? lines[lines.length - 1] : null
+            if (lastLine && typeof lastLine === 'string' && !lastLine.endsWith('\n')) lines.push('')
+            lines.push(`${indent}${reps}x`)
+            formatSteps(step.steps, indent + ' ', step)
+          } else {
+            formatSteps(step.steps, indent, step)
+          }
+          return
         }
 
-        // Format duration
-        let durationStr = ''
+        const power = normalizeTarget(step.power) || normalizeTarget(parentStep?.power)
+        const heartRate = normalizeHrTargetForExport(
+          normalizeTarget(step.heartRate) || normalizeTarget(parentStep?.heartRate)
+        )
+        const pace = normalizeTarget(step.pace) || normalizeTarget(parentStep?.pace)
+        const distanceStr = toDistanceToken(step.distance)
         const duration = step.durationSeconds || step.duration || 0
-
-        // For swimming, if we have distance, we usually don't want to send duration
         const shouldIncludeDuration = !isSwim || !step.distance || step.type === 'Rest'
+        const durationStr = duration > 0 && shouldIncludeDuration ? toDurationToken(duration) : ''
 
-        if (duration > 0 && shouldIncludeDuration) {
-          if (duration % 60 === 0) {
-            durationStr = `${duration / 60}m`
-          } else {
-            durationStr = `${duration}s`
-          }
-        }
+        const intensities: string[] = []
+        const getPowerStr = () => formatMetric(power, 'power')
+        const getHrStr = () => formatMetric(heartRate, 'hr')
+        const getPaceStr = () => formatMetric(pace, 'pace')
+        const metrics = loadPref.split('_')
+        let primaryFound = false
 
-        // Format power, heart rate, or pace
-        let intensityStr = ''
-
-        const hasPower = !!(power.value || power.range)
-        const hasHr = !!(heartRate && (heartRate.value !== undefined || heartRate.range))
-        const hasPace = !!(pace && (pace.value !== undefined || pace.range))
-
-        if (hasPower || hasHr || hasPace) {
-          const intensities: string[] = []
-
-          // Order matters for Intervals.icu parsing if multiple are provided
-          // We put the preferred one first
-          const addPower = () => {
-            if (hasPower) {
-              if (power.range) {
-                const start = Math.round((power.range.start ?? 0) * 100)
-                const end = Math.round((power.range.end ?? 0) * 100)
-                intensities.push(`ramp ${start}-${end}%`)
-              } else {
-                const val = Math.round((power.value || 0) * 100)
-                intensities.push(`${val}%`)
-              }
+        for (const metric of metrics) {
+          if (metric === 'hr') {
+            const s = getHrStr()
+            if (s) {
+              intensities.push(s)
+              primaryFound = true
+            }
+          } else if (metric === 'power') {
+            const s = getPowerStr()
+            if (s) {
+              intensities.push(s)
+              primaryFound = true
+            }
+          } else if (metric === 'pace') {
+            const s = getPaceStr()
+            if (s) {
+              intensities.push(s)
+              primaryFound = true
             }
           }
+          if (primaryFound && isRun) break
+        }
 
-          const addHr = () => {
-            if (hasHr) {
-              if (heartRate?.range) {
-                const start = Math.round((heartRate.range.start ?? 0) * 100)
-                const end = Math.round((heartRate.range.end ?? 0) * 100)
-                intensities.push(`${start}-${end}% LTHR`)
-              } else {
-                const val = Math.round((heartRate?.value || 0) * 100)
-                intensities.push(`${val}% LTHR`)
-              }
-            }
-          }
-
-          const addPace = () => {
-            if (hasPace) {
-              if (pace?.range) {
-                const start = Math.round((pace.range.start ?? 0) * 100)
-                const end = Math.round((pace.range.end ?? 0) * 100)
-                intensities.push(`${start}-${end}% pace`)
-              } else {
-                const val = Math.round((pace?.value || 0) * 100)
-                intensities.push(`${val}% pace`)
-              }
-            }
-          }
-
-          if (prioritizeHr) {
-            addHr()
-            addPower()
-            addPace()
-          } else {
-            addPower()
-            addHr()
-            addPace()
-          }
-
-          if (intensities.length > 0) {
-            intensityStr = intensities.join(' ')
+        if (intensities.length === 0) {
+          const fallback = getHrStr() || getPowerStr() || getPaceStr()
+          if (fallback) {
+            intensities.push(fallback)
+          } else if (isRun && step.type !== 'Rest') {
+            intensities.push('60% LTHR')
+          } else if (step.type === 'Rest' && !isRun) {
+            intensities.push('50%')
           }
         }
 
-        // Default fallback for Active/Warmup/Cooldown steps without targets
-        if (!intensityStr && step.type !== 'Rest') {
-          intensityStr = prioritizeHr ? '50% LTHR' : '50%'
-        }
-
-        // Cadence (optional)
-        let cadenceStr = ''
-        if (step.cadence) {
-          cadenceStr = ` ${step.cadence}rpm`
-        }
-
-        // Text/Name construction
+        const intensityStr = intensities.join(' ')
         let line = `${indent}-`
+        let name = (step.name || (step.type === 'Rest' ? 'Rest' : '')).trim()
 
-        if (step.type === 'Rest') {
-          const cleanRestName = step.name?.replace(/["\n\r]/g, '').trim()
-          if (cleanRestName && cleanRestName.toLowerCase() !== 'rest') {
-            line += ` ${cleanRestName}`
-          } else {
-            line += ' Rest'
-          }
-        } else if (step.name) {
-          // Clean the name
-          const cleanName = step.name.replace(/["\n\r]/g, '').trim()
+        if (name) {
+          name = name
+            .replace(/(\d+)\s*(minutes?|min)/gi, '$1m')
+            .replace(/(\d+)\s*(seconds?|sec)/gi, '$1s')
+        }
 
-          // Check if name is redundant with distance/duration info
-          const isRedundant =
-            isSwim &&
-            step.distance &&
-            (cleanName.toLowerCase().includes(`${step.distance}m`) ||
-              (cleanName.toLowerCase().includes('steady') && step.distance > 0))
+        if (isRun && name) {
+          name = name
+            .replace(/\s*\(\s*\d+(-\d+)?\s*w\s*\)/gi, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+        }
 
-          if (cleanName && !isRedundant) {
-            line += ` ${cleanName}`
+        if (name) line += ` ${name}`
+        if (distanceStr && !name.toLowerCase().includes(`${step.distance}m`)) line += ` ${distanceStr}`
+
+        if (durationStr) {
+          const durationMinutes = duration > 0 && duration % 60 === 0 ? duration / 60 : null
+          if (
+            durationMinutes === null ||
+            (!name.toLowerCase().includes(`${durationMinutes}m`) &&
+              !name.toLowerCase().includes(`${durationMinutes} min`))
+          ) {
+            line += ` ${durationStr}`
           }
         }
 
-        if (distanceStr) line += ` ${distanceStr}`
-        if (durationStr) line += ` ${durationStr}`
-
-        // Add intensity and cadence if available (even for Rest if targets exist)
         if (intensityStr) line += ` ${intensityStr}`
-        if (cadenceStr) line += ` ${cadenceStr}`
-
-        // Preserve leading indentation for nested loop formatting.
+        if (step.cadence) line += ` ${step.cadence}rpm`
         lines.push(line.trimEnd())
       })
     }
 
     formatSteps(workout.steps)
-
     return lines.join('\n')
   },
 

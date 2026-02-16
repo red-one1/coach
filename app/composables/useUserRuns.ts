@@ -33,9 +33,15 @@ export const ACTIVE_STATUSES = [
 
 export function useUserRuns() {
   const { data: session } = useAuth()
+  const hasUserSession = computed(() => Boolean((session.value?.user as any)?.id))
 
   // --- Initial Fetch ---
   const fetchActiveRuns = async () => {
+    if (!hasUserSession.value) {
+      runs.value = []
+      return
+    }
+
     if (isLoading.value && !pollInterval) return
 
     isLoading.value = true
@@ -86,7 +92,7 @@ export function useUserRuns() {
   const startPolling = () => {
     if (pollInterval) return
     pollInterval = setInterval(() => {
-      if (!isConnected.value && activeSubscribers > 0) {
+      if (!isConnected.value && activeSubscribers > 0 && hasUserSession.value) {
         fetchActiveRuns()
       }
     }, 5000)
@@ -204,6 +210,11 @@ export function useUserRuns() {
   }
 
   const init = async () => {
+    if (!hasUserSession.value) {
+      runs.value = []
+      return
+    }
+
     if (!initPromise) {
       initPromise = fetchActiveRuns()
     }
@@ -218,8 +229,18 @@ export function useUserRuns() {
     watch(
       () => (session.value?.user as any)?.id,
       (newId) => {
-        if (newId && !ws) {
-          connectWebSocket()
+        if (newId) {
+          init()
+        } else {
+          if (ws) {
+            ws.close()
+            ws = null
+          }
+          isConnected.value = false
+          initPromise = null
+          stopPolling()
+          stopPing()
+          runs.value = []
         }
       }
     )
@@ -227,7 +248,9 @@ export function useUserRuns() {
 
   onMounted(() => {
     activeSubscribers++
-    init()
+    if (hasUserSession.value) {
+      init()
+    }
   })
 
   onUnmounted(() => {
@@ -260,25 +283,46 @@ export function useUserRunsState() {
     () => runs.value.filter((r) => ACTIVE_STATUSES.includes(r.status)).length
   )
 
+  const notifiedRunIds = new Set<string>()
+
   const onTaskCompleted = (
     taskIdentifier: string,
     callback: (run: TriggerRun) => void | Promise<void>
   ) => {
+    const setupTime = Date.now()
+
+    // Keep track of which runs were already completed when this watcher started
+    const alreadyCompleted = new Set(
+      runs.value
+        .filter((r) => r.taskIdentifier === taskIdentifier && r.status === 'COMPLETED')
+        .map((r) => r.id)
+    )
+
     watch(
       runs,
-      (newRuns, oldRuns) => {
-        const newMatches = newRuns.filter((r) => r.taskIdentifier === taskIdentifier)
-        newMatches.forEach((newRun) => {
-          const isCompleted = newRun.status === 'COMPLETED'
-          if (isCompleted) {
-            const oldRun = oldRuns?.find((r) => r.id === newRun.id)
-            if (oldRun && oldRun.status !== 'COMPLETED') {
-              callback(newRun)
-            }
+      (newRuns) => {
+        const matches = newRuns.filter(
+          (r) => r.taskIdentifier === taskIdentifier && r.status === 'COMPLETED'
+        )
+        matches.forEach((run) => {
+          if (alreadyCompleted.has(run.id) || notifiedRunIds.has(run.id)) {
+            return
+          }
+
+          // Only notify if it finished AFTER we set up this watcher
+          // We add a 2-second grace period to account for minor clock differences
+          // and the time it takes for the initial fetch to reach the client.
+          const finishedTime = run.finishedAt ? new Date(run.finishedAt).getTime() : 0
+          if (finishedTime > setupTime - 2000) {
+            notifiedRunIds.add(run.id)
+            callback(run)
+          } else {
+            // It's an old run that just appeared in the list (e.g. after initial fetch)
+            alreadyCompleted.add(run.id)
           }
         })
       },
-      { deep: true }
+      { deep: true, immediate: true }
     )
   }
 

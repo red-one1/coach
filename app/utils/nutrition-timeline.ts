@@ -1,6 +1,5 @@
-import { addMinutes, startOfDay, endOfDay } from 'date-fns'
+import { addMinutes } from 'date-fns'
 import { fromZonedTime } from 'date-fns-tz'
-import { mergeFuelingWindows } from './merging-nutrition'
 
 export type WindowType =
   | 'PRE_WORKOUT'
@@ -104,39 +103,96 @@ export function getWorkoutDate(workout: any, timezone: string): number {
   }
 }
 
+export function hasMissingPlannedWorkoutStartTime(workout: any): boolean {
+  if (!workout || workout.type === 'Rest' || workout.type === 'Note') return false
+
+  const source = String(workout.source || '').toLowerCase()
+  const isCompleted =
+    source === 'completed' ||
+    source === 'intervals' ||
+    workout.status === 'completed' ||
+    workout.status === 'completed_plan'
+
+  if (isCompleted || source !== 'planned') {
+    return false
+  }
+
+  const startTime = workout.startTime
+  if (startTime == null) return true
+
+  if (typeof startTime === 'string') {
+    const trimmed = startTime.trim()
+    if (!trimmed) return true
+
+    if (/^00:00(?::00(?:\.\d{1,3})?)?$/.test(trimmed)) return true
+
+    if (trimmed.includes(':')) {
+      const [hRaw, mRaw, sRaw] = trimmed.split(':')
+      const h = Number(hRaw)
+      const m = Number(mRaw)
+      const s = Number((sRaw || '0').split('.')[0])
+      if (
+        Number.isFinite(h) &&
+        Number.isFinite(m) &&
+        Number.isFinite(s) &&
+        h === 0 &&
+        m === 0 &&
+        s === 0
+      ) {
+        return true
+      }
+    }
+
+    if (trimmed.includes('T')) {
+      const parsed = new Date(trimmed)
+      if (!isNaN(parsed.getTime())) {
+        const isMidnight =
+          parsed.getUTCHours() === 0 && parsed.getUTCMinutes() === 0 && parsed.getUTCSeconds() === 0
+        if (isMidnight) return true
+      }
+    }
+  }
+
+  if (startTime instanceof Date) {
+    return (
+      startTime.getUTCHours() === 0 &&
+      startTime.getUTCMinutes() === 0 &&
+      startTime.getUTCSeconds() === 0
+    )
+  }
+
+  return false
+}
+
+export function countPlannedWorkoutsWithMissingStartTime(workouts: any[]): number {
+  if (!Array.isArray(workouts) || workouts.length === 0) return 0
+  return workouts.reduce(
+    (count, workout) => count + (hasMissingPlannedWorkoutStartTime(workout) ? 1 : 0),
+    0
+  )
+}
+
 /**
- * Maps nutrition record and planned workouts to a unified timeline
+ * Maps nutrition record and planned workouts to a unified timeline.
+ * Relies on server-provided fuelingPlan for windows and targets.
  */
 export function mapNutritionToTimeline(
   nutritionRecord: any,
   workouts: any[],
   options: TimelineOptions
 ): FuelingTimelineWindow[] {
-  // Filter out rest activities from the timeline
   const trainingWorkouts = workouts.filter((w) => w.type !== 'Rest')
-
-  console.log('[TimelineUtil] Mapping started', {
-    workoutCount: trainingWorkouts.length,
-    hasPlan: !!nutritionRecord.fuelingPlan,
-    date: nutritionRecord.date,
-    timezone: options.timezone
-  })
-
-  const dateStr = nutritionRecord.date.split('T')[0]
+  const dateStr =
+    nutritionRecord.date instanceof Date
+      ? nutritionRecord.date.toISOString().split('T')[0]
+      : nutritionRecord.date.split('T')[0]
   const dayStart = fromZonedTime(`${dateStr}T00:00:00`, options.timezone)
   const dayEnd = fromZonedTime(`${dateStr}T23:59:59`, options.timezone)
   const fuelingPlan = nutritionRecord.fuelingPlan
 
-  console.log('[TimelineUtil] Day boundaries:', {
-    dayStart: dayStart.toISOString(),
-    dayEnd: dayEnd.toISOString()
-  })
-
   let baseTimeline: FuelingTimelineWindow[] = []
 
   if (fuelingPlan?.windows?.length > 0) {
-    console.log(`[TimelineUtil] Using stored plan with ${fuelingPlan.windows.length} windows`)
-
     // 1. Use the pre-calculated windows from the API
     baseTimeline = fuelingPlan.windows.map((w: any) => {
       // Find associated workout by ID or by time overlap
@@ -150,10 +206,6 @@ export function mapNutritionToTimeline(
           const diffMin = Math.abs(wStart - workStart) / 60000
 
           if (diffMin < 120) {
-            // 2 hour tolerance for matching stale plans
-            console.log(
-              `[TimelineUtil] Matched INTRA window to workout "${work.title}" (diff: ${Math.round(diffMin)}m)`
-            )
             return true
           }
         }
@@ -165,89 +217,24 @@ export function mapNutritionToTimeline(
         startTime: new Date(w.startTime),
         endTime: new Date(w.endTime),
         workout,
-        workoutTitle: w.workoutTitle || workout?.title, // Preserve stored title if workout matching is fuzzy
+        workoutTitle: w.workoutTitle || workout?.title,
         items: []
       }
     })
-  } else {
-    console.log('[TimelineUtil] No stored plan found, generating manually')
-    // 2. Fallback: Manual generation
-    const rawWindows: FuelingTimelineWindow[] = []
-    trainingWorkouts.forEach((workout) => {
-      const workoutStart = new Date(getWorkoutDate(workout, options.timezone))
-      const durationSec = workout.durationSec || workout.duration || workout.plannedDuration || 3600
-      const durationMin = durationSec / 60
-      const workoutEnd = addMinutes(workoutStart, durationMin)
-
-      const intensity = workout.workIntensity || workout.intensity || workout.intensityFactor || 0.7
-
-      rawWindows.push({
-        type: 'PRE_WORKOUT',
-        startTime: addMinutes(workoutStart, -options.preWorkoutWindow),
-        endTime: workoutStart,
-        targetCarbs: Math.round(options.weight * 1.5),
-        targetProtein: 20,
-        targetFat: 10,
-        description: 'Pre-workout fueling',
-        items: [],
-        workoutTitle: workout.title,
-        plannedWorkoutId: workout.id,
-        workout
-      })
-
-      rawWindows.push({
-        type: 'INTRA_WORKOUT',
-        startTime: workoutStart,
-        endTime: workoutEnd,
-        targetCarbs: Math.round((intensity > 0.8 ? 90 : 60) * (durationMin / 60)),
-        targetProtein: 0,
-        targetFat: 0,
-        targetFluid: Math.round(800 * (durationMin / 60)),
-        targetSodium: Math.round(600 * (durationMin / 60)),
-        description: 'During workout',
-        items: [],
-        workoutTitle: workout.title,
-        plannedWorkoutId: workout.id,
-        workout
-      })
-
-      rawWindows.push({
-        type: 'POST_WORKOUT',
-        startTime: workoutEnd,
-        endTime: addMinutes(workoutEnd, options.postWorkoutWindow),
-        targetCarbs: Math.round(options.weight * 1.2),
-        targetProtein: 30,
-        targetFat: 15,
-        description: 'Post-workout recovery',
-        items: [],
-        workoutTitle: workout.title,
-        plannedWorkoutId: workout.id,
-        workout
-      })
-    })
-
-    if (rawWindows.length > 0) {
-      baseTimeline = mergeFuelingWindows(rawWindows as any) as any
-    }
   }
 
-  // 3. Inject WORKOUT_EVENT markers
+  // 2. Inject WORKOUT_EVENT markers
   const timelineWithEvents: FuelingTimelineWindow[] = []
-
-  // Keep track of which workouts are already represented in the timeline
   const representedWorkoutIds = new Set<string>()
   baseTimeline.forEach((w) => {
     if (w.plannedWorkoutId) representedWorkoutIds.add(w.plannedWorkoutId)
     if (w.workout?.id) representedWorkoutIds.add(w.workout.id)
   })
 
-  // Sort base windows
   baseTimeline.sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
 
   baseTimeline.forEach((window) => {
-    // Inject WORKOUT_EVENT for INTRA and TRANSITION windows that represent a workout
     if ((window.type === 'INTRA_WORKOUT' || window.type === 'TRANSITION') && window.workout) {
-      console.log(`[TimelineUtil] Adding WORKOUT_EVENT for: ${window.workout.title}`)
       const workoutStartTime = new Date(getWorkoutDate(window.workout, options.timezone))
       timelineWithEvents.push({
         type: 'WORKOUT_EVENT',
@@ -264,13 +251,10 @@ export function mapNutritionToTimeline(
     timelineWithEvents.push(window)
   })
 
-  // 4. Inject "orphaned" workouts (those not tied to a window)
+  // 3. Inject "orphaned" workouts
   trainingWorkouts.forEach((workout) => {
     if (!representedWorkoutIds.has(workout.id)) {
-      console.log(`[TimelineUtil] Injecting orphaned workout: ${workout.title}`)
       const workoutStart = new Date(getWorkoutDate(workout, options.timezone))
-
-      // Find insertion point
       const insertIdx = timelineWithEvents.findIndex((w) => w.startTime > workoutStart)
       const eventWindow: FuelingTimelineWindow = {
         type: 'WORKOUT_EVENT',
@@ -292,13 +276,12 @@ export function mapNutritionToTimeline(
     }
   })
 
-  // 5. Final step: Add Daily Base gaps and slot items
+  // 4. Add Daily Base gaps and slot items
   const finalTimeline: FuelingTimelineWindow[] = []
   let lastTime = dayStart
 
   timelineWithEvents.forEach((window) => {
     if (window.startTime > lastTime) {
-      // Find meals from pattern that fall in this gap
       const gapMeals = (options.mealPattern || []).filter((m) => {
         try {
           const mTime = fromZonedTime(`${dateStr}T${m.time}:00`, options.timezone)
@@ -353,11 +336,10 @@ export function mapNutritionToTimeline(
     })
   }
 
-  // 5. Slot logged items (Actual + Synthetic)
+  // 5. Slot logged items
   const meals = ['breakfast', 'lunch', 'dinner', 'snacks']
   const allLoggedItems: any[] = []
 
-  // Actual logs
   meals.forEach((meal) => {
     if (Array.isArray(nutritionRecord[meal])) {
       allLoggedItems.push(
@@ -366,11 +348,7 @@ export function mapNutritionToTimeline(
     }
   })
 
-  // Synthetic logs from simulation (to show on timeline)
-  // We need the synthetic meals that the simulation logic generated.
-  // Since mapNutritionToTimeline doesn't have settings/timezone/logic access easily,
-  // we re-run a lightweight version of the heuristic if no fuelingPlan is available.
-
+  // Synthetic logs from plan (if no real logs)
   if (fuelingPlan?.windows && allLoggedItems.length === 0) {
     fuelingPlan.windows.forEach((w: any) => {
       if (w.targetCarbs > 0) {
@@ -382,7 +360,7 @@ export function mapNutritionToTimeline(
         })
       }
     })
-  } else if (allLoggedItems.length === 0 && nutritionRecord.carbsGoal > 0) {
+  } else if (allLoggedItems.length === 0 && (nutritionRecord.carbsGoal || 0) > 0) {
     const pattern =
       options.mealPattern && options.mealPattern.length > 0
         ? options.mealPattern
@@ -394,7 +372,7 @@ export function mapNutritionToTimeline(
     pattern.forEach((p: any) => {
       allLoggedItems.push({
         name: `Synthetic ${p.name}`,
-        carbs: Math.round(nutritionRecord.carbsGoal / pattern.length),
+        carbs: Math.round((nutritionRecord.carbsGoal || 300) / pattern.length),
         logged_at: fromZonedTime(`${dateStr}T${p.time}:00`, options.timezone).toISOString(),
         isSynthetic: true
       })
@@ -407,16 +385,14 @@ export function mapNutritionToTimeline(
 
     if (timeVal) {
       try {
-        // Handle "HH:mm" format
         if (typeof timeVal === 'string' && /^\d{2}:\d{2}$/.test(timeVal)) {
           itemTime = fromZonedTime(`${dateStr}T${timeVal}:00`, options.timezone)
         } else {
-          // Handle "YYYY-MM-DD HH:mm:ss" by replacing space with T
           const normalized = typeof timeVal === 'string' ? timeVal.replace(' ', 'T') : timeVal
           itemTime = new Date(normalized)
         }
       } catch (e) {
-        console.error('[TimelineUtil] Error parsing item time:', timeVal, e)
+        // ignore error
       }
     }
 
@@ -426,7 +402,6 @@ export function mapNutritionToTimeline(
       )
       if (window) window.items.push({ ...item, _heuristic_time: itemTime.toISOString() })
     } else {
-      // Heuristic for items without timestamps
       if (item.meal === 'breakfast') {
         const first = finalTimeline.find((w) => w.type === 'DAILY_BASE')
         if (first) first.items.push(item)
@@ -443,6 +418,5 @@ export function mapNutritionToTimeline(
     }
   })
 
-  console.log(`[TimelineUtil] Final timeline size: ${finalTimeline.length}`)
   return finalTimeline
 }

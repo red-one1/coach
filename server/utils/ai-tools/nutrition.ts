@@ -13,11 +13,14 @@ import {
   getStartOfLocalDateUTC,
   getEndOfLocalDateUTC
 } from '../../utils/date'
-import { calculateGlycogenState, calculateEnergyTimeline } from '../nutrition-domain/logic'
+import { calculateGlycogenState, calculateEnergyTimeline } from '../nutrition-domain'
 import { getProfileForItem } from '../nutrition-domain/absorption'
 import { getUserNutritionSettings } from '../../utils/nutrition/settings'
 import { metabolicService } from '../services/metabolicService'
 import { INTRA_WORKOUT_TARGET_ML_PER_HOUR, MEAL_LINKED_WATER_ML } from '../nutrition/hydration'
+import { mealRecommendationService } from '../services/mealRecommendationService'
+import { nutritionPlanService } from '../services/nutritionPlanService'
+import type { AiSettings } from '../ai-user-settings'
 
 const DEFAULT_MEAL_TIMES: Record<'breakfast' | 'lunch' | 'dinner' | 'snacks', string> = {
   breakfast: '07:00',
@@ -86,7 +89,7 @@ const recalculateDailyTotals = (nutrition: any) => {
   return { calories, protein, carbs, fat, fiber, sugar }
 }
 
-export const nutritionTools = (userId: string, timezone: string) => ({
+export const nutritionTools = (userId: string, timezone: string, aiSettings: AiSettings) => ({
   get_nutrition_log: tool({
     description:
       'Get nutrition data for specific dates. Use this when the user asks about their eating, meals, macros, or calories. Returns detailed meal logs.',
@@ -227,7 +230,7 @@ export const nutritionTools = (userId: string, timezone: string) => ({
         return {
           id: crypto.randomUUID(),
           ...item,
-          absorptionType: item.absorption_type || getProfileForItem(item.name).id,
+          absorptionType: item.absorption_type || 'BALANCED',
           logged_at: normalizedLoggedAt
         }
       })
@@ -400,6 +403,7 @@ export const nutritionTools = (userId: string, timezone: string) => ({
           'Name of the item to remove. If omitted, the ENTIRE meal will be cleared. Matching is case-insensitive.'
         )
     }),
+    needsApproval: async () => aiSettings.aiRequireToolApproval,
     execute: async ({ date, meal_type, item_name }) => {
       const dateUtc = new Date(`${date}T00:00:00Z`)
 
@@ -578,7 +582,7 @@ export const nutritionTools = (userId: string, timezone: string) => ({
       // Calculate persistent hydration debt
       const startDate = new Date(today)
       startDate.setUTCDate(today.getUTCDate() - 3)
-      const points = await metabolicService.getWaveRange(userId, startDate, today)
+      const { points } = await metabolicService.getWaveRange(userId, startDate, today)
       const lastPoint = points[points.length - 1]
       const hydrationDebt = lastPoint ? Math.max(0, lastPoint.fluidDeficit) : 0
 
@@ -706,6 +710,45 @@ export const nutritionTools = (userId: string, timezone: string) => ({
         },
         workouts_on_day: workoutStates.length
       }
+    }
+  }),
+
+  get_meal_recommendations: tool({
+    description:
+      'Get tailored meal recommendations for a specific window (PRE_WORKOUT, POST_WORKOUT, etc.) based on metabolic needs. Returns multiple options from the catalog or AI-generated.',
+    inputSchema: z.object({
+      date: z.string().describe('Date in ISO format (YYYY-MM-DD)'),
+      window_type: z
+        .enum(['PRE_WORKOUT', 'INTRA_WORKOUT', 'POST_WORKOUT', 'DAILY_BASE'])
+        .optional()
+        .describe('Specific window type to get recommendations for')
+    }),
+    execute: async ({ date, window_type }) => {
+      const targetDate = new Date(`${date}T12:00:00Z`)
+      const result = await mealRecommendationService.getRecommendations(userId, targetDate, {
+        scope: 'MEAL',
+        windowType: window_type
+      })
+      return result
+    }
+  }),
+
+  lock_meal_to_plan: tool({
+    description:
+      "Lock a specific meal option into the user's nutrition plan for a metabolic window.",
+    inputSchema: z.object({
+      date: z.string().describe('Date in ISO format (YYYY-MM-DD)'),
+      window_type: z.string().describe('The window type (e.g. PRE_WORKOUT)'),
+      meal: z.any().describe('The meal object to lock (from get_meal_recommendations)')
+    }),
+    execute: async ({ date, window_type, meal }) => {
+      const result = await nutritionPlanService.lockMeal(
+        userId,
+        new Date(`${date}T12:00:00Z`),
+        window_type,
+        meal
+      )
+      return { success: true, planMeal: result }
     }
   })
 })

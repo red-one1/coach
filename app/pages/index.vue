@@ -1,6 +1,7 @@
 <template>
   <div class="bg-gray-900 min-h-screen">
     <LandingHero />
+    <LandingNutritionExplainer />
     <LandingHowItWorks />
     <LandingDeepDiveArchitecture />
     <LandingFeatureBento />
@@ -15,7 +16,8 @@
           Ready to reach your peak?
         </h2>
         <p class="mx-auto mt-6 max-w-xl text-lg leading-8 text-gray-300">
-          Join hundreds of endurance athletes using Coach Watts to train smarter every day.
+          Join endurance athletes using Coach Watts to train smarter and fuel with confidence every
+          day.
         </p>
         <div class="mt-10 flex items-center justify-center gap-x-6">
           <UButton size="xl" to="/join" color="primary">Get Started for Free</UButton>
@@ -30,7 +32,7 @@
     <footer class="bg-gray-900 py-12 border-t border-gray-800">
       <div class="mx-auto max-w-7xl px-6 lg:px-8">
         <div class="flex flex-col items-center justify-between gap-6 sm:flex-row">
-          <p class="text-sm text-gray-400">&copy; 2025 Coach Watts. All rights reserved.</p>
+          <p class="text-sm text-gray-400">&copy; 2026 Coach Watts. All rights reserved.</p>
           <div class="flex gap-6">
             <UButton
               to="https://discord.gg/dPYkzg49T9"
@@ -73,14 +75,14 @@
     title: 'AI Endurance Coaching',
     ogTitle: 'Coach Watts - AI Endurance Coaching',
     description:
-      'Coach Watts is your AI-powered endurance coach. Optimize your training, recovery, and nutrition with personalized insights.',
+      'Coach Watts is your AI-powered endurance coach. Optimize training, recovery, and glycogen-aware fueling with personalized daily guidance.',
     ogDescription:
-      'Coach Watts is your AI-powered endurance coach. Optimize your training, recovery, and nutrition with personalized insights.',
+      'Coach Watts is your AI-powered endurance coach. Optimize training, recovery, and glycogen-aware fueling with personalized daily guidance.',
     ogImage: '/images/og-image.png',
     twitterCard: 'summary_large_image',
     twitterTitle: 'Coach Watts - AI Endurance Coaching',
     twitterDescription:
-      'Coach Watts is your AI-powered endurance coach. Optimize your training, recovery, and nutrition with personalized insights.',
+      'Coach Watts is your AI-powered endurance coach. Optimize training, recovery, and glycogen-aware fueling with personalized daily guidance.',
     twitterImage: '/images/og-image.png'
   })
 

@@ -50,7 +50,6 @@
       })
     }),
     onFinish: ({ message }) => {
-      console.log('[Chat] onFinish triggered for message:', message.id)
       refreshRuns()
     },
     onError: (error) => {
@@ -67,9 +66,6 @@
       }
       console.error('[Chat] onError triggered:', error)
       console.error('[Chat] Error Stack:', error.stack)
-    },
-    onToolCall: (toolCall) => {
-      console.log('[Chat] onToolCall triggered:', toolCall.toolCall.toolName)
     }
   })
 
@@ -86,13 +82,13 @@
     (parts) => {
       if (!parts) return
       /*
-      const lastMsg = chat.messages[chat.messages.length - 1]
-      if (lastMsg) {
-        console.log(
-          `[Chat] Watcher: Msg ${lastMsg.id} (${lastMsg.role}) parts updated. Count: ${parts.length}`
-        )
-      }
-      */
+    const lastMsg = chat.messages[chat.messages.length - 1]
+    if (lastMsg) {
+      console.log(
+        `[Chat] Watcher: Msg ${lastMsg.id} (${lastMsg.role}) parts updated. Count: ${parts.length}`
+      )
+    }
+    */
     },
     { deep: true }
   )
@@ -123,29 +119,26 @@
     input.value = ''
   }
 
-  const onToolApproval = (approval: { approvalId: string; approved: boolean; result?: string }) => {
-    console.log('[Chat] Tool Approval:', approval)
-
-    // Manually construct the tool approval response message
-    const responsePart = {
-      type: 'tool-approval-response',
-      approvalId: approval.approvalId,
-      approved: approval.approved,
-      result: approval.result
+  const onToolApproval = async (approval: {
+    approvalId: string
+    approved: boolean
+    result?: string
+  }) => {
+    if (typeof (chat as any).addToolApprovalResponse === 'function') {
+      await (chat as any).addToolApprovalResponse({
+        id: approval.approvalId,
+        approved: approval.approved,
+        reason: approval.result
+      })
+      // Trigger the follow-up model step so approved tools actually execute.
+      await (chat as any).sendMessage()
+      return
     }
 
-    const message = {
-      role: 'tool',
-      content: [responsePart]
-    }
-
-    console.log('[Chat] Sending tool approval message via sendMessage:', message)
-
-    if (typeof (chat as any).sendMessage === 'function') {
-      ;(chat as any).sendMessage(message)
-    } else {
-      console.error('[Chat] No sendMessage method found. Chat object keys:', Object.keys(chat))
-    }
+    console.error(
+      '[Chat] No addToolApprovalResponse method found. Chat object keys:',
+      Object.keys(chat)
+    )
   }
   // Load initial room and messages
   onMounted(async () => {
