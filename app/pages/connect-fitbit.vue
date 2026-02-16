@@ -27,7 +27,7 @@
               <div>
                 <h2 class="text-xl font-semibold">Connect Fitbit</h2>
                 <p class="text-sm text-muted">
-                  Connect your Fitbit account to sync nutrition history and food logs.
+                  Connect your Fitbit account to sync nutrition history, food logs, and HRV data.
                 </p>
               </div>
             </div>
@@ -40,6 +40,7 @@
                 <li>• Daily calories and macros</li>
                 <li>• Logged foods and meal entries</li>
                 <li>• Water intake summaries</li>
+                <li>• Daily HRV metrics (when available)</li>
                 <li>• Historical nutrition trends</li>
               </ul>
             </div>
@@ -68,6 +69,10 @@
                 <div class="flex items-center gap-2">
                   <UIcon name="i-heroicons-check-circle" class="w-4 h-4 text-green-600" />
                   <span>Read nutrition and food logs</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <UIcon name="i-heroicons-check-circle" class="w-4 h-4 text-green-600" />
+                  <span>Read heart rate data for HRV access</span>
                 </div>
               </div>
             </div>
@@ -100,7 +105,7 @@
     meta: [
       {
         name: 'description',
-        content: 'Connect your Fitbit account to sync nutrition history and food logs.'
+        content: 'Connect your Fitbit account to sync nutrition history, food logs, and HRV data.'
       }
     ]
   })

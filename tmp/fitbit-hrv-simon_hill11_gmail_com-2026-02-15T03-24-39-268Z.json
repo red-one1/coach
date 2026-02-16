@@ -1,0 +1,32 @@
+[
+  {
+    "date": "2026-02-13",
+    "dailyRmssd": 26.442,
+    "deepRmssd": 23.09,
+    "coverage": null,
+    "rawValue": {
+      "dailyRmssd": 26.442,
+      "deepRmssd": 23.09
+    }
+  },
+  {
+    "date": "2026-02-14",
+    "dailyRmssd": 19.762,
+    "deepRmssd": 19.898,
+    "coverage": null,
+    "rawValue": {
+      "dailyRmssd": 19.762,
+      "deepRmssd": 19.898
+    }
+  },
+  {
+    "date": "2026-02-15",
+    "dailyRmssd": 19.871,
+    "deepRmssd": 21.486,
+    "coverage": null,
+    "rawValue": {
+      "dailyRmssd": 19.871,
+      "deepRmssd": 21.486
+    }
+  }
+]

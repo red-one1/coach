@@ -46,7 +46,8 @@ export default defineEventHandler(async (event) => {
     path: '/'
   })
 
-  const scope = 'nutrition'
+  const scopes = ['nutrition', 'heartrate']
+  const scope = scopes.join(' ')
 
   const params = new URLSearchParams({
     response_type: 'code',
