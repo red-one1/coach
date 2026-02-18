@@ -20,6 +20,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { prisma } from '../server/utils/db'
 import { refreshFitbitToken } from '../server/utils/fitbit'
+import { wellnessRepository } from '../server/utils/repositories/wellnessRepository'
 
 type FitbitHrvDay = {
   dateTime: string
@@ -267,6 +268,52 @@ async function main() {
 
   const sorted = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
 
+  let wellnessRowsUpserted = 0
+  let wellnessRowsCreated = 0
+
+  for (const row of sorted) {
+    const hasHrvValue = row.dailyRmssd !== null || row.deepRmssd !== null
+    if (!hasHrvValue) continue
+
+    const date = new Date(`${row.date}T00:00:00.000Z`)
+    const primaryHrv = row.dailyRmssd ?? row.deepRmssd
+
+    const createData = {
+      userId: user.id,
+      date,
+      hrv: primaryHrv,
+      hrvSdnn: row.deepRmssd,
+      rawJson: {
+        fitbitHrv: row.rawValue,
+        fitbitHrvCoverage: row.coverage,
+        fitbitHrvImportedAt: new Date().toISOString()
+      }
+    }
+
+    const updateData = {
+      hrv: primaryHrv ?? undefined,
+      hrvSdnn: row.deepRmssd ?? undefined,
+      rawJson: {
+        fitbitHrv: row.rawValue,
+        fitbitHrvCoverage: row.coverage,
+        fitbitHrvImportedAt: new Date().toISOString()
+      }
+    }
+
+    const { isNew } = await wellnessRepository.upsert(
+      user.id,
+      date,
+      createData as any,
+      updateData as any,
+      'fitbit'
+    )
+
+    wellnessRowsUpserted++
+    if (isNew) {
+      wellnessRowsCreated++
+    }
+  }
+
   await mkdir(opts.outDir, { recursive: true })
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -289,6 +336,8 @@ async function main() {
   console.log(`Completed. Requests: ${requests}`)
   console.log(`Unique HRV days returned: ${sorted.length}`)
   console.log(`Days with at least one HRV metric: ${nonNullDays}`)
+  console.log(`Wellness rows upserted: ${wellnessRowsUpserted}`)
+  console.log(`Wellness rows created: ${wellnessRowsCreated}`)
   console.log(`JSON: ${jsonPath}`)
   console.log(`CSV : ${csvPath}`)
   console.log('='.repeat(60))
