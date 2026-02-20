@@ -33,11 +33,7 @@ function getDateStr(date: any): string {
   return new Date().toISOString().split('T')[0]!
 }
 
-function parseMealDateTime(
-  timeVal: unknown,
-  dateStr: string,
-  timezone: string
-): Date | null {
+function parseMealDateTime(timeVal: unknown, dateStr: string, timezone: string): Date | null {
   if (!timeVal) return null
 
   if (typeof timeVal === 'string') {
@@ -390,13 +386,27 @@ export function calculateEnergyTimeline(
     nutritionRecord.waterMl &&
     finalMeals.reduce((acc, m) => acc + (m.totalFluid || 0), 0) === 0
   ) {
-    finalMeals.push({
-      time: dayStart,
-      name: 'Hydration',
-      totalCarbs: 0,
-      totalKcal: 0,
-      totalFluid: nutritionRecord.waterMl,
-      profile: ABSORPTION_PROFILES.RAPID
+    const totalWaterMl = Number(nutritionRecord.waterMl)
+    const configuredTimes = Array.isArray(settings?.mealPattern)
+      ? settings.mealPattern
+          .map((entry: any) => (typeof entry?.time === 'string' ? entry.time.trim() : ''))
+          .filter((time: string) => /^\d{1,2}:\d{2}$/.test(time))
+      : []
+
+    const hydrationTimes =
+      configuredTimes.length > 0 ? configuredTimes : ['08:00', '13:00', '19:00']
+    const perSlotWaterMl = totalWaterMl / hydrationTimes.length
+
+    hydrationTimes.forEach((time: string) => {
+      finalMeals.push({
+        time: fromZonedTime(`${dateStr}T${time}:00`, timezone),
+        name: 'Hydration (estimated)',
+        totalCarbs: 0,
+        totalKcal: 0,
+        totalFluid: perSlotWaterMl,
+        profile: ABSORPTION_PROFILES.RAPID,
+        isSynthetic: true
+      })
     })
   }
 
