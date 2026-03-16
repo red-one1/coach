@@ -26,6 +26,7 @@ import {
   buildStructurePublishFields
 } from '../server/utils/planned-workout-structure-sync'
 import { publishActivityEvent } from '../server/utils/activity-realtime'
+import { normalizeSwimStructure } from '../server/utils/swim-structure'
 
 const workoutStructureSchema = {
   type: 'object',
@@ -705,6 +706,10 @@ export const adjustStructuredWorkoutTask = task({
     })
     const targetPolicyPrompt = formatTargetPolicyPrompt(targetPolicy, loadPreference)
     const targetFormatPolicyPrompt = formatTargetFormatPolicyPrompt(targetFormatPolicy)
+    const steadyTargetStyleRule =
+      targetPolicy.defaultTargetStyle === 'value'
+        ? 'Prefer single-value targets for steady aerobic/endurance/tempo blocks. Use ranges only when the workout explicitly asks for a range or ramp.'
+        : 'Prefer metric ranges for steady aerobic/endurance/tempo blocks.'
     const workoutType = String(workout.type || '').toLowerCase()
     const isCycling = workoutType.includes('ride')
     const isRun = workoutType.includes('run')
@@ -724,7 +729,7 @@ export const adjustStructuredWorkoutTask = task({
     - Target selection MUST follow TARGET POLICY priority order: ${priorityText}.
     - Use \`heartRate.units\` = "LTHR" for percentage HR targets and \`pace.units\` = "Pace" for percentage pace targets.
     - ${targetPolicy.allowMixedTargetsPerStep ? 'Mixed metrics in one step are allowed, but primaryTarget still must follow policy.' : 'Use one intensity metric per step unless user feedback explicitly asks for mixed cues.'}
-    - ${targetPolicy.defaultTargetStyle === 'range' || targetPolicy.preferRangesForSteady ? 'Prefer metric ranges for steady aerobic/endurance/tempo blocks.' : 'Single-value targets are acceptable for steady blocks unless range is explicitly requested.'}
+    - ${steadyTargetStyleRule}
     - If user specifies "Zone 2", refer to the provided zones before using generic percentages.
     - Do not stack maximal efforts without sufficient recovery.`
         : isSwim
@@ -822,6 +827,10 @@ export const adjustStructuredWorkoutTask = task({
         stepsCount: Array.isArray(structure?.steps) ? structure.steps.length : 0,
         exercisesCount: Array.isArray(structure?.exercises) ? structure.exercises.length : 0
       })
+
+      if (workout.type === 'Swim') {
+        normalizeSwimStructure(structure)
+      }
 
       totals = normalizeAndCalculate(structure.steps || [])
       const coverageValidation = validateStructuredCoverage({

@@ -219,6 +219,7 @@ model UserSystemMessageDismissal {
 model OAuthApp {
   id            String          @id @default(uuid())
   name          String
+  sourceName    String?
   description   String?
   homepageUrl   String?
   logoUrl       String?
@@ -1509,6 +1510,7 @@ model PlanAdherence {
   intensityScore   Int?
   durationScore    Int?
   executionScore   Int?
+  cadenceScore     Int?
   summary          String?
   deviations       Json?
   recommendations  Json?
