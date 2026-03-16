@@ -2,6 +2,55 @@
 
 Implement a manual, two-way, user-scoped sync flow between dev and production instances, initiated only from dev. The safest design is an allowlisted export/import pipeline: production only ever exports the selected user’s non-privileged data through a signed one-time token, and dev imports it into the email-matched dev user after applying conflict and filtering rules. The reverse direction should use the same pipeline and schema, but must still exclude secrets, admin-only records, and privilege-bearing account fields.
 
+**Prompt**
+
+
+I’m capturing this branch objective into the session plan first, then I’ll ask the minimum set of clarifying questions that affect the design boundary.
+
+Created memory file plan.md
+
+I have the objective and constraints recorded. The main unknowns are sync direction, conflict policy, and the exact data boundary, because those determine whether this stays safe on production.
+
+Analyzing your answers...
+
+Q: Should sync be one-way from production to dev only, or also allow dev to push changes back to production?
+A: two way sync - but syncs in either direction should be manual-only - not occuring on an automated schedule
+Q: What data should be in scope for the selected user?
+A: All user-owned relational data - Everything tied to that user by FK or join tables, Workouts and plans only - Training/workout-related entities only, Nutrition and wellness too - Include nutrition, wellness, metrics, body measurements, Chat and AI history too - Include chat rooms, turns, usage, recommendations
+Q: How should sync be initiated?
+A: On-demand self-service by the user - User initiates sync for their own account
+Q: How should the selected prod user map to dev?
+A: Match by email - Simplest if accounts already correspond
+Q: Should production ever expose secrets or privileged records in the sync payload?
+A: No, exclude secrets/admin-only data entirely - Recommended safety boundary
+Your answers narrowed the shape considerably: this is two-way, manual-only, scoped to one user’s non-privileged data, and keyed by email. I still need the conflict and operator model nailed down before I can turn this into a sound implementation plan.
+
+Inserted into memory file plan.md
+
+Analyzing your answers...
+
+Q: If the same record changed in both environments, what should happen on manual sync?
+A: Newest updatedAt wins - Needs strong timestamp trust across both instances
+Q: How should deletions be handled?
+A: Soft-delete only - Map deletions to tombstones where supported
+Q: Should binary/file data be included, such as FIT files or uploaded assets tied to the user?
+A: Exclude blobs/files - Simpler and safer initial scope
+Q: When you say self-service, where should the user be allowed to start sync?
+A: Only from dev instance - Prod remains passive/data source unless explicitly targeted
+Q: How should one instance authenticate to the other for sync?
+A: Signed one-time user export/import token - Less persistent trust between instances
+That resolves most of the risk surface. The remaining design gap is how account identity and role-bearing fields behave, because syncing those naively would break your prod/dev permission boundary.
+
+Inserted into memory file plan.md
+
+Analyzing your answers...
+
+Q: Should account/profile rows sync only safe profile fields, while excluding roles, subscription, billing, tokens, and admin flags?
+A: Yes, profile-only subset for account-like tables - Recommended to preserve the prod/dev privilege boundary
+Q: If the email does not exist on dev yet, what should happen?
+A: Fail and require a pre-created dev account - Simpler but more manual
+
+
 **Steps**
 
 1. Define the sync boundary and data contract.
