@@ -7,104 +7,111 @@ Implement a manual, two-way, user-scoped sync flow between dev and production in
 
 I’m capturing this branch objective into the session plan first, then I’ll ask the minimum set of clarifying questions that affect the design boundary.
 
-Created memory file plan.md
 
 I have the objective and constraints recorded. The main unknowns are sync direction, conflict policy, and the exact data boundary, because those determine whether this stays safe on production.
 
 Analyzing your answers...
 
-Q: Should sync be one-way from production to dev only, or also allow dev to push changes back to production?
-A: two way sync - but syncs in either direction should be manual-only - not occuring on an automated schedule
-Q: What data should be in scope for the selected user?
-A: All user-owned relational data - Everything tied to that user by FK or join tables, Workouts and plans only - Training/workout-related entities only, Nutrition and wellness too - Include nutrition, wellness, metrics, body measurements, Chat and AI history too - Include chat rooms, turns, usage, recommendations
-Q: How should sync be initiated?
-A: On-demand self-service by the user - User initiates sync for their own account
-Q: How should the selected prod user map to dev?
-A: Match by email - Simplest if accounts already correspond
-Q: Should production ever expose secrets or privileged records in the sync payload?
-A: No, exclude secrets/admin-only data entirely - Recommended safety boundary
-Your answers narrowed the shape considerably: this is two-way, manual-only, scoped to one user’s non-privileged data, and keyed by email. I still need the conflict and operator model nailed down before I can turn this into a sound implementation plan.
+>Q: Should sync be one-way from production to dev only, or also allow dev to push changes back to production?  
+>A: two way sync - but syncs in either direction should be manual-only - not occuring on an automated schedule
+  
+> Q: What data should be in scope for the selected user?  
+> A: All user-owned relational data - Everything tied to that user by FK or join tables, Workouts and plans only - Training/workout-related entities only, Nutrition and wellness too - Include nutrition, wellness, metrics, body measurements, Chat and AI history too - Include chat rooms, turns, usage, recommendations
 
-Inserted into memory file plan.md
+> Q: How should sync be initiated?  
+> A: On-demand self-service by the user - User initiates sync for their own account
+   
+> Q: How should the selected prod user map to dev?  
+> A: Match by email - Simplest if accounts already correspond
+  
+> Q: Should production ever expose secrets or privileged records in the sync payload?  
+> A: No, exclude secrets/admin-only data entirely - Recommended safety boundary
+  
+Your answers narrowed the shape considerably: **this is two-way, manual-only, scoped to one user’s non-privileged data, and keyed by email.**   
 
-Analyzing your answers...
+I still need the **conflict and operator model** nailed down before I can turn this into a sound implementation plan.
 
-Q: If the same record changed in both environments, what should happen on manual sync?
-A: Newest updatedAt wins - Needs strong timestamp trust across both instances
-Q: How should deletions be handled?
-A: Soft-delete only - Map deletions to tombstones where supported
-Q: Should binary/file data be included, such as FIT files or uploaded assets tied to the user?
-A: Exclude blobs/files - Simpler and safer initial scope
-Q: When you say self-service, where should the user be allowed to start sync?
-A: Only from dev instance - Prod remains passive/data source unless explicitly targeted
-Q: How should one instance authenticate to the other for sync?
-A: Signed one-time user export/import token - Less persistent trust between instances
-That resolves most of the risk surface. The remaining design gap is how account identity and role-bearing fields behave, because syncing those naively would break your prod/dev permission boundary.
 
-Inserted into memory file plan.md
+>Q: If the same record changed in both environments, what should happen on manual sync?  
+>A: Newest updatedAt wins - Needs strong timestamp trust across both instances
 
-Analyzing your answers...
+>Q: How should deletions be handled?  
+>A: Soft-delete only - Map deletions to tombstones where supported
 
-Q: Should account/profile rows sync only safe profile fields, while excluding roles, subscription, billing, tokens, and admin flags?
-A: Yes, profile-only subset for account-like tables - Recommended to preserve the prod/dev privilege boundary
-Q: If the email does not exist on dev yet, what should happen?
-A: Fail and require a pre-created dev account - Simpler but more manual
+>Q: Should binary/file data be included, such as FIT files or uploaded assets tied to the user?  
+>A: Exclude blobs/files - Simpler and safer initial scope
+
+>Q: When you say self-service, where should the user be allowed to start sync?  
+>A: Only from dev instance - Prod remains passive/data source unless explicitly targeted
+
+>Q: How should one instance authenticate to the other for sync?  
+>A: Signed one-time user export/import token - Less persistent trust between instances
+
+That resolves most of the risk surface. The remaining design gap is **how account identity and role-bearing fields behave, because syncing those naively would break your prod/dev permission boundary.**
+
+
+>Q: Should account/profile rows sync only safe profile fields, while excluding roles, subscription, billing, tokens, and admin flags?  
+>A: Yes, profile-only subset for account-like tables - Recommended to preserve the prod/dev privilege boundary
+
+>Q: If the email does not exist on dev yet, what should happen?  
+>A: Fail and require a pre-created dev account - Simpler but more manual
+
 
 
 **Steps**
 
-1. Define the sync boundary and data contract.
-   Depends on product decisions already made.
-   Create an explicit entity allowlist covering user-owned relational data to include: workouts/plans, nutrition/wellness, chat/AI history, goals/events, recommendations, and other user-scoped records.
-   Create an explicit denylist for privileged or environment-specific data: admin flags, billing/subscription state, secrets, OAuth/integration/API tokens, blobs/files, webhook secrets, and operational/admin tables.
-   Define per-table ownership rules so every exported row is provably reachable from the selected user or from an already-allowed child record.
-   Define field-level filtering for account-like tables so only safe profile fields sync, never role/privilege or environment-coupled identity/security fields.
-2. Design the sync protocol and trust model.
-   Depends on 1.
-   Use a signed one-time export/import token rather than persistent cross-instance trust.
-   Dev initiates the request, generates a sync request, and sends the user to production to authorize export of their own data.
-   Production validates the logged-in regular user, ensures the requested email matches the authenticated user, builds a filtered export package, signs it, and returns it only for that user.
-   Dev verifies the token/package signature, checks the target dev account by email, and fails if no matching dev user exists.
+1. Define the sync boundary and data contract.  
+   Depends on product decisions already made.  
+   Create an explicit entity allowlist covering user-owned relational data to include: workouts/plans, nutrition/wellness, chat/AI history, goals/events, recommendations, and other user-scoped records.  
+   Create an explicit denylist for privileged or environment-specific data: admin flags, billing/subscription state, secrets, OAuth/integration/API tokens, blobs/files, webhook secrets, and operational/admin tables.  
+   Define per-table ownership rules so every exported row is provably reachable from the selected user or from an already-allowed child record.  
+   Define field-level filtering for account-like tables so only safe profile fields sync, never role/privilege or environment-coupled identity/security fields.  
+2. Design the sync protocol and trust model.  
+   Depends on 1.  
+   Use a signed one-time export/import token rather than persistent cross-instance trust.  
+   Dev initiates the request, generates a sync request, and sends the user to production to authorize export of their own data.    
+   Production validates the logged-in regular user, ensures the requested email matches the authenticated user, builds a filtered export package, signs it, and returns it only for that user.  
+   Dev verifies the token/package signature, checks the target dev account by email, and fails if no matching dev user exists.  
 3. Define merge and deletion semantics.
-   Depends on 1.
-   Apply newest `updatedAt` wins where both sides have the same logical row.
-   Support manual sync in either direction using the same merge rules.
-   Do not hard-delete on sync; only propagate soft-delete semantics where the target schema supports them.
-   For tables without reliable `updatedAt`, decide deterministic fallback behavior before implementation, likely source-wins per sync direction or exclusion from v1.
-4. Map the implementation onto existing server patterns.
-   Depends on 2 and 3.
-   Reuse existing auth/session helpers to distinguish regular-user production access from dev-admin capabilities.
-   Reuse repository-style user scoping patterns so all data queries remain constrained by `userId` ownership.
-   Reuse audit logging for every sync request, approval, export, import, conflict decision, and failure.
-   Reuse existing admin user page and/or developer settings UX as the entry point on dev.
-5. Add a production-side export path.
-   Depends on 1, 2, and 4.
-   Add a user-authenticated route on production that accepts a one-time sync request, validates ownership, builds the export graph from allowlisted entities, strips denied fields, and emits a signed payload.
-   Ensure production never exposes data for other users and never exposes admin-only or secret-bearing records.
-   Ensure the payload includes stable identifiers, timestamps, source instance metadata, and a schema version for compatibility.
-6. Add a dev-side import/orchestration path.
-   Depends on 1, 2, 3, 4, and 5.
-   Add a dev-only initiation flow that starts sync for a selected target user from the dev instance.
-   Verify the returned signed payload, match the dev user by email, reject missing dev users, and apply upsert/merge logic across the allowlisted entities in dependency order.
-   Handle parent-child ordering and join tables explicitly, including self-references and many-to-many tables.
-   Produce a preview/summary of rows created, updated, skipped, conflicted, and soft-deleted.
-7. Add reverse-direction support from dev to production with the same safety boundary.
-   Depends on 5 and 6.
-   Keep initiation on dev, but require the production-side import path to enforce the same restriction: the production user can only sync their own non-privileged data.
-   Reuse the same schema versioning, filtering, validation, and audit model.
-   Treat production as the stricter environment: even when importing from dev, disallow role/privilege changes and any data outside the selected production user scope.
-8. Add admin/operator UX and observability.
-   Parallel with 5-7 after the protocol is defined.
-   Add a dev admin page or action on the existing admin user detail screen for initiating sync, showing direction, recent status, and dry-run/apply results.
-   Add production-facing user approval UX only if the one-time token flow requires an interactive confirmation page.
-   Add audit log metadata and, if useful, a dedicated sync history record for traceability and debugging.
-9. Verify with focused end-to-end scenarios.
-   Depends on 5-8.
-   Test prod-to-dev and dev-to-prod manual sync for a single existing user with representative data across workouts, plans, nutrition, wellness, chat, and recommendations.
-   Test rejection of other-user access on production.
-   Test exclusion of tokens, admin flags, billing/subscription state, and blobs.
-   Test conflict handling with divergent `updatedAt` values.
-   Test failure when the target dev user does not exist.
+   Depends on 1.  
+   Apply newest `updatedAt` wins where both sides have the same logical row.  
+   Support manual sync in either direction using the same merge rules.  
+   Do not hard-delete on sync; only propagate soft-delete semantics where the target schema supports them.  
+   For tables without reliable `updatedAt`, decide deterministic fallback behavior before implementation, likely source-wins per sync direction or exclusion from v1.  
+4. Map the implementation onto existing server patterns.  
+   Depends on 2 and 3.  
+   Reuse existing auth/session helpers to distinguish regular-user production access from dev-admin capabilities.  
+   Reuse repository-style user scoping patterns so all data queries remain constrained by `userId` ownership.  
+   Reuse audit logging for every sync request, approval, export, import, conflict decision, and failure.  
+   Reuse existing admin user page and/or developer settings UX as the entry point on dev.  
+5. Add a production-side export path.  
+   Depends on 1, 2, and 4.  
+   Add a user-authenticated route on production that accepts a one-time sync request, validates ownership, builds the export graph from allowlisted entities, strips denied fields, and emits a signed payload.  
+   Ensure production never exposes data for other users and never exposes admin-only or secret-bearing records.  
+   Ensure the payload includes stable identifiers, timestamps, source instance metadata, and a schema version for compatibility.  
+6. Add a dev-side import/orchestration path.  
+   Depends on 1, 2, 3, 4, and 5.  
+   Add a dev-only initiation flow that starts sync for a selected target user from the dev instance.  
+   Verify the returned signed payload, match the dev user by email, reject missing dev users, and apply upsert/merge logic across the allowlisted entities in dependency order.  
+   Handle parent-child ordering and join tables explicitly, including self-references and many-to-many tables.  
+   Produce a preview/summary of rows created, updated, skipped, conflicted, and soft-deleted.  
+7. Add reverse-direction support from dev to production with the same safety boundary.  
+   Depends on 5 and 6.  
+   Keep initiation on dev, but require the production-side import path to enforce the same restriction: the production user can only sync their own non-privileged data.  
+   Reuse the same schema versioning, filtering, validation, and audit model.  
+   Treat production as the stricter environment: even when importing from dev, disallow role/privilege changes and any data outside the selected production user scope.  
+8. Add admin/operator UX and observability.  
+   Parallel with 5-7 after the protocol is defined.  
+   Add a dev admin page or action on the existing admin user detail screen for initiating sync, showing direction, recent status, and dry-run/apply results.  
+   Add production-facing user approval UX only if the one-time token flow requires an interactive confirmation page.  
+   Add audit log metadata and, if useful, a dedicated sync history record for traceability and debugging.  
+9. Verify with focused end-to-end scenarios.  
+   Depends on 5-8.  
+   Test prod-to-dev and dev-to-prod manual sync for a single existing user with representative data across workouts, plans, nutrition, wellness, chat, and recommendations.  
+   Test rejection of other-user access on production.  
+   Test exclusion of tokens, admin flags, billing/subscription state, and blobs.  
+   Test conflict handling with divergent `updatedAt` values.  
+   Test failure when the target dev user does not exist.  
 
 **Relevant files**
 
